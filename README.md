@@ -1,2 +1,242 @@
 # cess_pois
-CESS proof of idle space
+
+CESS proof of idle space is used to reduce the work pressure of TEE Worker and improve the efficiency of idle space certification.
+CESS proof of idle space transfers the generation of idle files to storage nodes, and through a series of challenge-response interactive proof processes to ensure that storage nodes honestly generate and store idle files.
+
+In the proof of idle space, the idle file generation algorithm requires storage nodes to spend a certain amount of time and space to calculate and store idle files. Each idle file is 64M, the calculation of a single file cannot be accelerated in parallel, but multiple files can be generated at the same time. After generating a batch of idle files, the storage node needs to submit the merkel hash tree root of the files to the TEE Worker to commit to generate these idle spaces.
+
+Then TEE Worker will challenge the storage nodes for these commitments. Storage nodes need to prove that these idle files are generated in a legal way, and we call this process Proof of File Commitment.If these commitments prove to be verified by TEE Worker, the CESS network will recognize that these corresponding idle spaces are valid.
+
+Then, the consensus node may initiate a space proof challenge to the storage nodes of the whole network at any time. If the storage node passes the challenge, it proves that it continues to hold the promised idle space, and the CESS network will issue rewards to these honest storage nodes, which is similar to the storage proof of CESS.
+
+We believe that providing more storage space is cheaper than providing higher computing power.At present, it takes at least a few minutes for a storage node to generate a batch of idle files(even one file takes so long), and the proof process only takes more than ten seconds. The storage node cannot temporarily generate idle files and provide valid proofs in a short period of time, which constitutes the security basis of the proof of idle space.
+
+## Verifier call guide
+
+The verifier is responsible for verifying the proof provided by the prover. In the actual CESS network, the verifier is served by TEE Worker.
+
+### Init Verifier
+Before using the verifier, it needs to be initialized first. 
+Since the lightweight MHT is used in the verification process, the MHT object pool also needs to be initialized.
+```go
+import (
+    "cess_pos_demo/pois"
+	"cess_pos_demo/tree"
+    "cess_pos_demo/expanders"
+)
+
+// key is cess_pos_demo.acc.RsaKey,be created by tee worker first.
+// k,n,d respectively represent the number of layers of expanders, the number of nodes in each layer and the in-degree of each node.
+// k,n,d are always set to 7, 1024*1024 and 64.
+verifier:=pois.NewVerifier(key, k,n,d)
+
+// init mht object pool to reduce memory allocation
+// n is the number of nodes in each layer,HashSize indicates the size of each element,the default is 64 (bytes) Generally. 
+tree.InitMhtPool(n,expanders.HashSize)
+```
+
+### Register Storage Miner
+
+The verifier needs to keep information about every storage miner it interacts with.
+So before using Proof of Space, you need to register miners.
+```go
+//minerID is storage miner's accountId,it is a byte slice
+verifier.RegisterProverNode(minerID)
+```
+
+### PoIS setp 1:Receive Commits
+
+first, receive idle file commits from a storage miner.
+```go
+//commits is a commits set of pois.CommitProof slice structure form miner
+//commits can be transmitted using any communication protocol, and are generally serialized into a json byte sequence.
+//Therefore, the received data needs to be decoded first and then handed over to the verifier for storage.
+err:=verifier.ReceiveCommits(minerID,commits)
+if err!=nil{
+    //error handling code...
+}
+
+//if everythings is be ok,you need to response ok to miner.
+// ...
+```
+
+### POIS setp 2:Generate Commit Challenges
+
+After receiving the commits, it is necessary to generate commitchallenges to the storage miner, 
+this step is to prove that the idle file commit by the miner is valid.
+```go
+//left and right is the bounds of commits you want to challenge,such as if you receive 16 idle file commits from miner,
+//you can challenge these commits by set left=0,right=16.If you receive many commits,but just want to challenge a part,
+//you can set left=0,right=num(number you want,num<= lenght of commits),and then left=num,right=others... set them in order.
+chals, err := verifier.CommitChallenges(minerID, left, right)
+if err!=nil{
+    //error handling code...
+}
+// send chals to minner,chals is a slice of int64 slice,like [][]int64
+// chals[i] represents a idle file commit challenge,including chals[i][0]=FileIndex,chals[i][1]=NodeIndex(last layer),
+// chals[i][j]=(node(j-1)'s parent node)
+```
+
+### POIS setp 3:Verify Commit Proofs
+
+The verifier needs to verify the commit challenges proof submitted by the storage miner.
+```go
+//commitProof, err := prover.ProveCommit(chals)
+
+// chals is commit challenges generated by verifier before,commitProof is chals proof generated by miner.
+// verifier need to compare chals's file and node index and commitProofs' in VerifyCommitProofs method.
+err:=verifier.VerifyCommitProofs(minerID, chals, commitProof)
+if err!=nil{
+    //verification failed
+    ////error handling code...
+}
+//verification success
+//send ok to miner
+```
+
+### POIS step 4:Verify Acc Proof
+
+If the commit proof verification is successful, the storage miner will submit the proof of acc.
+```go
+//accproof, err := prover.ProveAcc(indexsOfChallengedFile)
+
+//chals is commit challenges generated by verifier before,accproof is generated by miner.
+err = verifier.VerifyAcc(minerID, chals, accproof)
+if err != nil {
+	//verification failed
+    ////error handling code...
+}
+//verification success,commit verify be done,verifier will update miner Info in VerifyAcc method.
+//send ok to miner
+```
+
+### POIS step 5:Generate Space Proof
+
+This work will be performed by CESS Node, which is compatible with proof of storage.
+But when testing you can mock the execution.
+```go
+//num is the number of space challenges you want,it cannot exceed Count(idle file number for which commit verification has been passed).
+spaceChals, err := verifier.SpaceChallenges(minerID, num)
+if err!=nil{
+    //error handling code...
+}
+//send spaceChals to miner,spaceChals same as commit chals,but one idle file just one node in last layer be challenged
+```
+
+### POIS step 6:Verify Space Proof
+
+Verify the proof of space challenges submitted by the Storage Miner
+```go
+// spaceProof, err := prover.ProveSpace(spaceChals)
+
+//spaceProof generated by miner
+err = verifier.VerifySpace(minerID, spaceChals, spaceProof)
+if err!=nil{
+     //error handling code...
+}
+//send ok to miner
+// if err==nil,verify space success,the tee worker needs to report the result to the chain, 
+//which can be implemented directly in rust later.
+```
+
+### POIS step 7:Verify Deletion Proof
+
+If the storage miner does not have enough space to store user files, it needs to delete some idle files, 
+and the verifier needs to verify that the new accumulator is obtained by deleting the specified file from the previous accumulator.
+```go
+//chProof, Err := prover.ProveDeletion(number)
+//chProof and Err are go channel,because deletion is a delayed operation that first sends a delete signal and then waits for other
+//file-altering operations (such as generating or attesting files) to complete before starting the delete.
+//Note that when testing the deletion proof, the code block that judges the remaining logical space needs to be commented out, 
+//because if there is enough unproven space, the deletion proof is not required.
+/*
+code:
+------------------------------------------------------
+//If the unauthenticated space is large enough, there is no need to delete idle files
+    if size := FileSize * num; size < p.space {
+        p.space -= size
+        ch <- nil
+        Err <- nil
+        return
+    }
+    num -= p.space / FileSize
+    p.space = 0
+    //If the uncommitted space is large enough, delete num uncommitted idle files
+    fnum := (p.generated - p.commited)
+    if fnum*(p.Expanders.K+1) >= num {
+        err := p.deleteFiles((num+p.Expanders.K)/(p.Expanders.K+1), true)
+        if err != nil {
+            Err <- errors.Wrap(err, "prove deletion error")
+        }
+        p.space -= num * FileSize
+        ch <- nil
+        return
+    } else if fnum > 0 {
+        num -= fnum * (p.Expanders.K + 1)
+        err := p.deleteFiles(fnum, true)
+        if err != nil {
+            ch <- nil
+            Err <- errors.Wrap(err, "prove deletion error")
+            return
+        }
+        p.space -= fnum * (p.Expanders.K + 1) * FileSize
+    }
+------------------------------------------------------
+space module:
+------------------------------------------------------
+|physical space                                      |
+| ----------------------------------------------------
+|logical space(defined by pois.AvailableSpace)       |
+|-----------------------------------------------------
+|user files   |idle files  |unproven or unused space |
+------------------------------------------------------
+*/
+
+//delProof read from chProof,
+err = verifier.VerifyDeletion(minerID, delProof)
+if err!=nil{
+    //error handling code...
+}
+//send ok to miner
+```
+
+## Prover call guide
+
+The prover is responsible for generating idle space and submitting proofs to the verifier. This role is usually played by storage nodes.
+
+### Init Prover
+
+A storage node needs to uniquely hold a certifier object in any life cycle.
+
+```go
+// k,n,d and key are params that needs to be negotiated with the verifier in advance.
+// minerID is storage node's account ID, and space is the amount of physical space available(MiB)
+prover, err := pois.NewProver(k, n, d, minerID, key, space)
+if err != nil {
+    //error handling code...
+}
+
+// Run the idle file generation service, it returns a channel (recorded in the prover object), 
+// insert the file ID into the channel to automatically generate idle files.
+// The number of threads started by default is pois.MaxCommitProofThread(he number of files generation supported at the same time)
+prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
+```
+### POIS step 1:Generate Idle Files
+
+```go
+// Request the file generation service to generate num idle files, it is asynchronous, and return true when the command is sent successfully.
+// It essentially continuously inserts a certain number of file IDs into the channel, which may be blocked when the channel is full.
+// When the file is generated, the corresponding field in the prover will be updated.
+ok := prover.GenerateFile(num)
+// You can call this method according to actual needs to flexibly control file generation
+```
+
+### Submit File Commits
+
+``` go
+// GetCommits method read file commits from dir storaged idle files. You need to submit commits to verifier.
+commits, err := prover.GetCommits(16)
+if err != nil {
+    //error handling code...
+}
+```
