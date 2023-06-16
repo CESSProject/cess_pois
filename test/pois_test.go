@@ -9,13 +9,13 @@ import (
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := 7, 1024*1024, 64
+	k, n, d := int64(7), int64(1024*1024), int64(64)
 	key := acc.RsaKeygen(2048)
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), key, 8192)
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
-	verifier := pois.NewVerifier(key, graph.K, graph.N, graph.D)
+	verifier := pois.NewVerifier(key, k, n, d)
 
 	//run idle file generation server
 	prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
