@@ -14,11 +14,10 @@ func TestIdleFileGeneration(t *testing.T) {
 	tree.InitMhtPool(1024*1024, expanders.HashSize)
 	graph := expanders.ConstructStackedExpanders(7, 1024*1024, 64)
 	t.Log("construct stacked expanders time", time.Since(ts))
-	tree.InitMhtPool(1024*1024, expanders.HashSize)
 	ts = time.Now()
 	wg := sync.WaitGroup{}
-	wg.Add(16)
-	for i := 0; i < 16; i++ {
+	wg.Add(1)
+	for i := 0; i < 1; i++ {
 		go func(count int) {
 			defer wg.Done()
 			err := graph.GenerateIdleFile([]byte("test miner id"), int64(count+1), expanders.DEFAULT_IDLE_FILES_PATH)

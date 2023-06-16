@@ -26,7 +26,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("generate file error")
 	}
 	//wait 8 minutes for file generate
-	time.Sleep(time.Minute * 6)
+	time.Sleep(time.Minute * 8)
 	ts := time.Now()
 
 	//get commits
@@ -114,7 +114,7 @@ func TestPois(t *testing.T) {
 
 	//deletion proof
 	ts = time.Now()
-	chProof, Err := prover.ProveDeletion(16)
+	chProof, Err := prover.ProveDeletion(16 * 8)
 	var delProof *pois.DeletionProof
 	select {
 	case err = <-Err:
@@ -144,47 +144,3 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("update prover status time", time.Since(ts))
 }
-
-// ts = time.Now()
-
-// t.Log("verifier receive commits time", time.Since(ts))
-
-// func TestPoisService(t *testing.T) {
-// 	//prover service
-// 	k, n, d := int64(7), int64(1024*1024), int64(64)
-// 	key := acc.RsaKeygen(2048)
-// 	commitCh, commitRes := make(chan []pois.Commit), make(chan bool)
-// 	commitProofCh, commitProofRes := make(chan []pois.CommitProof), make(chan bool)
-// 	spaceProofCh, spaceProofCh := make(chan []pois.SpaceProof), make(chan bool)
-// 	go func() {
-// 		prover, err := pois.NewProver(k, n, d, []byte("test miner id"), key, 8192*8)
-// 		if err != nil {
-// 			t.Log("new prover error", err)
-// 			return
-// 		}
-// 		prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
-// 		//generate file
-// 		go func() {
-// 			num := int64(16)
-// 			for {
-// 				ok := prover.GenerateFile(num)
-// 				if !ok {
-// 					time.Sleep(time.Second * 10)
-// 				}
-// 				if prover.GetSpace() < num*pois.FileSize*(prover.Expanders.K+1) {
-// 					if num == 1 {
-// 						time.Sleep(time.Minute)
-// 						break
-// 					}
-// 					num = 1
-// 				}
-// 			}
-// 		}()
-// 		//send commits
-
-// 	}()
-// 	//verifier service
-
-// 	// sleep 2 hours
-// 	time.Sleep(2 * time.Hour)
-// }
