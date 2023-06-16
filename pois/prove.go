@@ -510,7 +510,6 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 	go func() {
 		p.delete.Store(true)
 		var tmp int64
-		roots := make([][]byte, num)
 
 		for p.generate.Load() || p.update.Load() || p.added > p.generated {
 			//wait for all updates to complete
@@ -556,6 +555,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 		p.rw.Unlock()
 		data := p.Expanders.FilePool.Get().(*[]byte)
 		defer p.Expanders.FilePool.Put(data)
+		roots := make([][]byte, num)
 		for i := int64(1); i <= num; i++ {
 			if err := p.ReadFileLabels(tmp+i, *data); err != nil {
 				Err <- errors.Wrap(err, "prove deletion error")
@@ -594,8 +594,8 @@ func (p *Prover) organizeFiles(num int64) error {
 		if err := util.DeleteFile(name); err != nil {
 			return err
 		}
-		p.space += num * p.Expanders.K * FileSize
 	}
+	p.space += num * p.Expanders.K * FileSize
 	return nil
 }
 
