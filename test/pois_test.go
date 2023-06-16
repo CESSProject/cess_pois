@@ -9,13 +9,13 @@ import (
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := 7, 1024*1024, 64
+	k, n, d := int64(7), int64(1024*1024), int64(64)
 	key := acc.RsaKeygen(2048)
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), key, 8192)
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
-	verifier := pois.NewVerifier(key, graph.K, graph.N, graph.D)
+	verifier := pois.NewVerifier(key, k, n, d)
 
 	//run idle file generation server
 	prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
@@ -148,3 +148,43 @@ func TestPois(t *testing.T) {
 // ts = time.Now()
 
 // t.Log("verifier receive commits time", time.Since(ts))
+
+// func TestPoisService(t *testing.T) {
+// 	//prover service
+// 	k, n, d := int64(7), int64(1024*1024), int64(64)
+// 	key := acc.RsaKeygen(2048)
+// 	commitCh, commitRes := make(chan []pois.Commit), make(chan bool)
+// 	commitProofCh, commitProofRes := make(chan []pois.CommitProof), make(chan bool)
+// 	spaceProofCh, spaceProofCh := make(chan []pois.SpaceProof), make(chan bool)
+// 	go func() {
+// 		prover, err := pois.NewProver(k, n, d, []byte("test miner id"), key, 8192*8)
+// 		if err != nil {
+// 			t.Log("new prover error", err)
+// 			return
+// 		}
+// 		prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
+// 		//generate file
+// 		go func() {
+// 			num := int64(16)
+// 			for {
+// 				ok := prover.GenerateFile(num)
+// 				if !ok {
+// 					time.Sleep(time.Second * 10)
+// 				}
+// 				if prover.GetSpace() < num*pois.FileSize*(prover.Expanders.K+1) {
+// 					if num == 1 {
+// 						time.Sleep(time.Minute)
+// 						break
+// 					}
+// 					num = 1
+// 				}
+// 			}
+// 		}()
+// 		//send commits
+
+// 	}()
+// 	//verifier service
+
+// 	// sleep 2 hours
+// 	time.Sleep(2 * time.Hour)
+// }

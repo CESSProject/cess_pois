@@ -173,6 +173,10 @@ func (p *Prover) AddSpace(size int64) {
 	p.space += size
 }
 
+func (p *Prover) GetSpace() int64 {
+	return p.space
+}
+
 // GetCount get Count Safely
 func (p *Prover) GetCount() int64 {
 	p.rw.RLock()
