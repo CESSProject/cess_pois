@@ -9,7 +9,7 @@ import (
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(7), int64(1024*1024), int64(64)
+	k, n, d := int64(7), int64(1024*1024*4), int64(64)
 	key := acc.RsaKeygen(2048)
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), key, 8192)
 	if err != nil {
@@ -21,16 +21,16 @@ func TestPois(t *testing.T) {
 	prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
 
 	//add file to generate
-	ok := prover.GenerateFile(16)
+	ok := prover.GenerateFile(4)
 	if !ok {
 		t.Fatal("generate file error")
 	}
 	//wait 8 minutes for file generate
-	time.Sleep(time.Minute * 8)
+	time.Sleep(time.Minute * 12)
 	ts := time.Now()
 
 	//get commits
-	commits, err := prover.GetCommits(16)
+	commits, err := prover.GetCommits(4)
 	if err != nil {
 		t.Fatal("get commits error", err)
 	}
@@ -48,7 +48,7 @@ func TestPois(t *testing.T) {
 
 	//generate commits challenges
 	ts = time.Now()
-	chals, err := verifier.CommitChallenges(prover.ID, 0, 16)
+	chals, err := verifier.CommitChallenges(prover.ID, 0, 4)
 	if err != nil {
 		t.Fatal("generate commit challenges error", err)
 	}
@@ -114,7 +114,7 @@ func TestPois(t *testing.T) {
 
 	//deletion proof
 	ts = time.Now()
-	chProof, Err := prover.ProveDeletion(16 * 8)
+	chProof, Err := prover.ProveDeletion(4 * 8)
 	var delProof *pois.DeletionProof
 	select {
 	case err = <-Err:

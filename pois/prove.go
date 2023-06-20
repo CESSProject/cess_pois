@@ -76,7 +76,7 @@ type DeletionProof struct {
 
 func NewProver(k, n, d int64, ID []byte, key acc.RsaKey, space int64) (*Prover, error) {
 
-	if k == 0 || n == 0 || d == 0 || space == 0 || len(ID) == 0 ||
+	if k <= 0 || n <= 0 || d <= 0 || space <= 0 || len(ID) == 0 ||
 		key.G.BitLen() == 0 || key.N.BitLen() == 0 {
 		err := errors.New("bad init params")
 		return nil, errors.Wrap(err, "init prover error")
@@ -84,6 +84,7 @@ func NewProver(k, n, d int64, ID []byte, key acc.RsaKey, space int64) (*Prover, 
 	prover := &Prover{
 		ID: ID,
 	}
+	FileSize = FileSize * n / (1024 * 1024)
 	prover.Expanders = expanders.ConstructStackedExpanders(k, n, d)
 	var err error
 	prover.AccManager, err = acc.NewMutiLevelAcc(AccPath, key)
@@ -515,7 +516,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 			//wait for all updates to complete
 		}
 		//If the unauthenticated space is large enough, there is no need to delete idle files
-		if size := FileSize * num; size < p.space {
+		if size := FileSize * num; size <= p.space {
 			p.space -= size
 			ch <- nil
 			Err <- nil

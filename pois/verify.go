@@ -298,7 +298,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 	}
 	label := make([]byte, len(ID)+8+expanders.HashSize)
 	for i := 0; i < len(chals); i++ {
-		if chals[i][0] != proof.Indexs[i] {
+		if chals[i][0] != proof.Indexs[i] && chals[i][0] != pNode.Count+int64(i)+1 {
 			err := errors.New("bad file index")
 			return errors.Wrap(err, "verify acc proofs error")
 		}

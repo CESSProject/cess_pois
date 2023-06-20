@@ -12,12 +12,12 @@ import (
 func TestIdleFileGeneration(t *testing.T) {
 	ts := time.Now()
 	tree.InitMhtPool(1024*1024, expanders.HashSize)
-	graph := expanders.ConstructStackedExpanders(7, 1024*1024, 64)
+	graph := expanders.ConstructStackedExpanders(7, 1024*1024*4, 64)
 	t.Log("construct stacked expanders time", time.Since(ts))
 	ts = time.Now()
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	for i := 0; i < 1; i++ {
+	wg.Add(4)
+	for i := 0; i < 4; i++ {
 		go func(count int) {
 			defer wg.Done()
 			err := graph.GenerateIdleFile([]byte("test miner id"), int64(count+1), expanders.DEFAULT_IDLE_FILES_PATH)
@@ -31,14 +31,15 @@ func TestIdleFileGeneration(t *testing.T) {
 }
 
 func TestRealationMap(t *testing.T) {
-	graph := expanders.ConstructStackedExpanders(3, 1024, 64)
+	graph := expanders.ConstructStackedExpanders(7, 1024*1024*4, 64)
 	ch := graph.RunRelationalMapServer([]byte("test id"), 1)
-	count := 0
-	for node := range ch {
-		if count > 10 {
+	ts := time.Now()
+	count := 1
+	for range ch {
+		if count >= int((graph.K+1)*graph.N) {
 			break
 		}
-		t.Log("node index", node.Index)
 		count++
 	}
+	t.Log("time", time.Since(ts))
 }

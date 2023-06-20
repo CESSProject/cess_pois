@@ -68,7 +68,7 @@ func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count int64) 
 
 func (expanders *Expanders) RunRelationalMapServer(MinerID []byte, Count int64) <-chan *Node {
 
-	out := make(chan *Node, expanders.N/1024)
+	out := make(chan *Node, expanders.N)
 
 	go func() {
 		for l := int64(0); l <= expanders.K; l++ {
