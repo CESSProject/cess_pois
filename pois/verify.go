@@ -49,7 +49,7 @@ func GetVerifier() *Verifier {
 	return verifier
 }
 
-func (v *Verifier) RegisterProverNode(ID []byte) error {
+func (v *Verifier) RegisterProverNode(ID []byte, acc []byte, Count int64) error {
 	id := hex.EncodeToString(ID)
 	if _, ok := v.Nodes[id]; ok {
 		err := errors.New("prover node already exist")
@@ -58,7 +58,8 @@ func (v *Verifier) RegisterProverNode(ID []byte) error {
 	v.Nodes[id] = &ProverNode{
 		ID:         ID,
 		CommitsBuf: make([]Commit, MaxBufSize),
-		Acc:        v.Key.G.Bytes(),
+		Acc:        acc,
+		Count:      Count,
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID)
+	verifier.RegisterProverNode(prover.ID, key.G.Bytes(), 0)
 
 	//verifier receive commits
 	ts = time.Now()
