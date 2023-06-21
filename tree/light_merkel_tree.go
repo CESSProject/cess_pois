@@ -170,6 +170,20 @@ func VerifyPathProof(root, data []byte, proof PathProof) bool {
 	return bytes.Equal(root, data)
 }
 
+func CheckIndexPath(index int64, locs []byte) bool {
+	for i := 0; i < len(locs); i++ {
+		if (index+1)%2 == 0 {
+			if locs[i] != 0 {
+				return false
+			}
+		} else if locs[i] != 1 {
+			return false
+		}
+		index /= 2
+	}
+	return true
+}
+
 func NewHash(size int) hash.Hash {
 	switch size {
 	case 32:

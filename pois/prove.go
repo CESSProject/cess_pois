@@ -35,7 +35,13 @@ type Prover struct {
 	ID         []byte
 	cmdCh      chan<- int64
 	resCh      <-chan bool
+	chainState *ChainState
 	AccManager acc.AccHandle
+}
+
+type ChainState struct {
+	Acc   acc.AccHandle
+	Count int64
 }
 
 type MhtProof struct {
@@ -63,7 +69,9 @@ type AccProof struct {
 }
 
 type SpaceProof struct {
-	Proofs    []*MhtProof        `json:"proofs"`
+	Left      int64              `json:"left"`
+	Right     int64              `json:"right"`
+	Proofs    [][]*MhtProof      `json:"proofs"`
 	Roots     [][]byte           `json:"roots"`
 	WitChains []*acc.WitnessNode `json:"wit_chains"`
 }
@@ -88,6 +96,10 @@ func NewProver(k, n, d int64, ID []byte, key acc.RsaKey, space int64) (*Prover, 
 	prover.Expanders = expanders.ConstructStackedExpanders(k, n, d)
 	var err error
 	prover.AccManager, err = acc.NewMutiLevelAcc(AccPath, key)
+	prover.chainState = &ChainState{
+		Acc:   prover.AccManager.GetSnapshot(),
+		Count: 0,
+	}
 	prover.space = space
 	return prover, errors.Wrap(err, "init prover error")
 }
@@ -183,6 +195,21 @@ func (p *Prover) GetCount() int64 {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
 	return p.count
+}
+
+func (p *Prover) UpdateChainState() {
+	p.rw.RLock()
+	defer p.rw.RUnlock()
+	p.chainState.Acc = p.AccManager.GetSnapshot()
+	p.chainState.Count = p.count
+}
+
+func (p *Prover) GetNewChainStates() ([]byte, int64) {
+	p.rw.RLock()
+	defer p.rw.RUnlock()
+	acc := p.AccManager.GetSnapshot().Accs.Value
+	count := p.count
+	return acc, count
 }
 
 // RunIdleFileGenerationServer start the specified number of goroutines to generate idle files
@@ -445,49 +472,53 @@ func (p *Prover) generateCommitProof(fdir string, count, c int64) (CommitProof, 
 	return proof, nil
 }
 
-func (p *Prover) ProveSpace(challenges [][]int64) (*SpaceProof, error) {
+func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof, error) {
 	var err error
-	lens := len(challenges)
-	if lens <= 0 {
-		err := errors.New("bad challenge length")
+	if len(challenges) <= 0 || right-left <= 0 {
+		err := errors.New("bad challenge range")
 		return nil, errors.Wrap(err, "prove space error")
 	}
+
 	proof := &SpaceProof{
-		Proofs:    make([]*MhtProof, lens),
-		Roots:     make([][]byte, lens),
-		WitChains: make([]*acc.WitnessNode, lens),
+		Proofs:    make([][]*MhtProof, right-left),
+		Roots:     make([][]byte, right-left),
+		WitChains: make([]*acc.WitnessNode, right-left),
 	}
-	indexs := make([]int64, lens)
+	proof.Left = left
+	proof.Right = right
+	indexs := make([]int64, right-left)
 	data := p.Expanders.FilePool.Get().(*[]byte)
-	for i := 0; i < lens; i++ {
-		if err := p.ReadFileLabels(challenges[i][0], *data); err != nil {
+
+	for i := left; i < right; i++ {
+		if err := p.ReadFileLabels(i, *data); err != nil {
 			return nil, errors.Wrap(err, "prove space error")
 		}
 		mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-
-		indexs[i] = challenges[i][0]
-		proof.Roots[i] = mht.GetRoot(expanders.HashSize)
-
-		idx := int(challenges[i][1]) % expanders.HashSize
-		mhtProof, err := mht.GetPathProof(*data, idx, expanders.HashSize)
-		if err != nil {
-			return nil, errors.Wrap(err, "prove space error")
+		indexs[i-left] = i
+		proof.Roots[i-left] = mht.GetRoot(expanders.HashSize)
+		proof.Proofs[i-left] = make([]*MhtProof, len(challenges))
+		for j := 0; j < len(challenges); j++ {
+			idx := int(challenges[j] % p.Expanders.N)
+			pathProof, err := mht.GetPathProof(*data, idx, expanders.HashSize)
+			if err != nil {
+				if err != nil {
+					return nil, errors.Wrap(err, "prove space error")
+				}
+			}
+			label := make([]byte, expanders.HashSize)
+			copy(label, (*data)[idx*expanders.HashSize:(idx+1)*expanders.HashSize])
+			proof.Proofs[i-left][j] = &MhtProof{
+				Paths: pathProof.Path,
+				Locs:  pathProof.Locs,
+				Index: expanders.NodeType(challenges[j]),
+				Label: label,
+			}
 		}
-
-		label := make([]byte, expanders.HashSize)
-		copy(label, (*data)[idx*expanders.HashSize:(idx+1)*expanders.HashSize])
-
-		proof.Proofs[i] = &MhtProof{
-			Paths: mhtProof.Path,
-			Locs:  mhtProof.Locs,
-			Index: expanders.NodeType(challenges[i][1]),
-			Label: label,
-		}
-
 		tree.RecoveryMht(mht)
+
 	}
 	p.Expanders.FilePool.Put(data)
-	proof.WitChains, err = p.AccManager.GetWitnessChains(indexs)
+	proof.WitChains, err = p.chainState.Acc.GetWitnessChains(indexs)
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
 	}

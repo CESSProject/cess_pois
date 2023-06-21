@@ -18,7 +18,7 @@ func TestPois(t *testing.T) {
 	verifier := pois.NewVerifier(key, k, n, d)
 
 	//run idle file generation server
-	prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
+	prover.RunIdleFileGenerationServer(4)
 
 	//add file to generate
 	ok := prover.GenerateFile(4)
@@ -87,10 +87,11 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("update status error", err)
 	}
+	prover.UpdateChainState()
 	t.Log("update prover status time", time.Since(ts))
 	//generate space challenges
 	ts = time.Now()
-	spaceChals, err := verifier.SpaceChallenges(prover.ID, int64(len(chals)))
+	spaceChals, err := verifier.SpaceChallenges(22)
 	if err != nil {
 		t.Fatal("generate space chals error", err)
 	}
@@ -98,7 +99,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 5)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -106,7 +107,7 @@ func TestPois(t *testing.T) {
 
 	//verify space proof
 	ts = time.Now()
-	err = verifier.VerifySpace(prover.ID, spaceChals, spaceProof)
+	err = verifier.VerifySpace(verifier.GetNode(prover.ID), spaceChals, spaceProof)
 	if err != nil {
 		t.Fatal("verify space proof error", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"cess_pois/util"
 	"crypto/rand"
 	"encoding/hex"
+	"math"
 	"math/big"
 	"unsafe"
 
@@ -17,17 +18,22 @@ import (
 var (
 	MaxBufSize = 1 * 16
 	verifier   *Verifier
-	SpaceChals = 1
-	Pick       = 1
+	SpaceChals int64 = 22
+	Pick             = 1
 )
+
+type Record struct {
+	Acc    []byte
+	Count  int64
+	record int64
+}
 
 // ProverNode denote Prover
 type ProverNode struct {
 	ID         []byte   // Prover ID(generally, use AccountID)
 	CommitsBuf []Commit //buffer for all layer MHT proofs of one commit
 	BufSize    int
-	Acc        []byte //Prover's accumulator
-	Count      int64  // Idle file proofs' counter
+	*Record
 }
 
 type Verifier struct {
@@ -42,6 +48,7 @@ func NewVerifier(key acc.RsaKey, k, n, d int64) *Verifier {
 		Expanders: *expanders.NewExpanders(k, n, d),
 		Nodes:     make(map[string]*ProverNode),
 	}
+	SpaceChals = int64(math.Log2(float64(n)))
 	return verifier
 }
 
@@ -49,19 +56,54 @@ func GetVerifier() *Verifier {
 	return verifier
 }
 
-func (v *Verifier) RegisterProverNode(ID []byte, acc []byte, Count int64) error {
+func (v *Verifier) RegisterProverNode(ID []byte, acc []byte, Count int64) {
 	id := hex.EncodeToString(ID)
-	if _, ok := v.Nodes[id]; ok {
-		err := errors.New("prover node already exist")
-		return errors.Wrap(err, "register prover node error")
+	var pNode *ProverNode
+	if node, ok := v.Nodes[id]; ok {
+		pNode = node
+	} else {
+		pNode = &ProverNode{
+			Record: &Record{},
+		}
+		v.Nodes[id] = pNode
 	}
-	v.Nodes[id] = &ProverNode{
-		ID:         ID,
-		CommitsBuf: make([]Commit, MaxBufSize),
-		Acc:        acc,
-		Count:      Count,
+	pNode.ID = ID
+	pNode.CommitsBuf = make([]Commit, MaxBufSize)
+	pNode.Acc = acc
+	pNode.Count = Count
+}
+
+func NewProverNode(ID []byte, acc []byte, Count int64) *ProverNode {
+	return &ProverNode{
+		ID: ID,
+		Record: &Record{
+			Acc:   acc,
+			Count: Count,
+		},
 	}
-	return nil
+}
+
+func (v *Verifier) GetNode(ID []byte) *ProverNode {
+	id := hex.EncodeToString(ID)
+	return v.Nodes[id]
+}
+
+func (v *Verifier) IsLogout(ID []byte) bool {
+	id := hex.EncodeToString(ID)
+	_, ok := v.Nodes[id]
+	return !ok
+}
+
+func (v *Verifier) LogoutProverNode(ID []byte) ([]byte, int64) {
+	id := hex.EncodeToString(ID)
+	node, ok := v.Nodes[id]
+	if !ok {
+		return nil, 0
+	}
+	acc := node.Acc
+	count := node.Count
+	delete(v.Nodes, id)
+	return acc, count
 }
 
 func (v *Verifier) ReceiveCommits(ID []byte, commits []Commit) bool {
@@ -127,38 +169,22 @@ func (v *Verifier) CommitChallenges(ID []byte, left, right int) ([][]int64, erro
 	return challenges, nil
 }
 
-func (v *Verifier) SpaceChallenges(ID []byte, param int64) ([][]int64, error) {
+func (v *Verifier) SpaceChallenges(param int64) ([]int64, error) {
 	//Randomly select several nodes from idle files as random challenges
-	id := hex.EncodeToString(ID)
-	pNode, ok := v.Nodes[id]
-	if !ok {
-		err := errors.New("prover node not found")
-		return nil, errors.Wrap(err, "generate commit challenges error")
-	}
-	if pNode.Count < param {
-		param = pNode.Count
-	}
-	challenges := make([][]int64, param)
+	challenges := make([]int64, param)
 	mp := make(map[int64]struct{})
 	for i := int64(0); i < param; i++ {
 		for {
-			r1, err := rand.Int(rand.Reader, new(big.Int).SetInt64(pNode.Count))
+			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
 			if err != nil {
 				return nil, errors.Wrap(err, "generate commit challenges error")
 			}
-			//range [1,Count]
-			r1 = r1.Add(r1, big.NewInt(1))
-			if _, ok := mp[r1.Int64()]; ok {
+			if _, ok := mp[r.Int64()]; ok {
 				continue
 			}
-			challenges[i] = make([]int64, SpaceChals+1)
-			challenges[i][0] = r1.Int64()
-			r2, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
-			if err != nil {
-				return nil, errors.Wrap(err, "generate commit challenges error")
-			}
-			r2.Add(r2, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
-			challenges[i][1] = r2.Int64()
+			mp[r.Int64()] = struct{}{}
+			r.Add(r, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
+			challenges[i] = r.Int64()
 			break
 		}
 	}
@@ -323,32 +349,34 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 	return nil
 }
 
-func (v *Verifier) VerifySpace(ID []byte, chals [][]int64, proof *SpaceProof) error {
-	id := hex.EncodeToString(ID)
-	pNode, ok := v.Nodes[id]
-	if !ok {
-		err := errors.New("prover node not found")
-		return errors.Wrap(err, "verify space proofs error")
-	}
-	if len(chals) != len(proof.Roots) {
+func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpaceProof) error {
+	if len(chals) <= 0 || pNode.record+1 != proof.Left || pNode.Count+1 < proof.Right {
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify space proofs error")
 	}
-	label := make([]byte, len(ID)+8+expanders.HashSize)
-	for i := 0; i < len(chals); i++ {
-		if chals[i][1] != int64(proof.Proofs[i].Index) {
-			err := errors.New("bad file index")
-			return errors.Wrap(err, "verify space proofs error")
+	label := make([]byte, len(pNode.ID)+8+expanders.HashSize)
+	for i := 0; i < len(proof.Roots); i++ {
+		for j := 0; j < len(chals); j++ {
+			if chals[j] != int64(proof.Proofs[i][j].Index) {
+				err := errors.New("bad file index")
+				return errors.Wrap(err, "verify space proofs error")
+			}
+			pathProof := tree.PathProof{
+				Locs: proof.Proofs[i][j].Locs,
+				Path: proof.Proofs[i][j].Paths,
+			}
+			//check index
+			if !tree.CheckIndexPath(chals[j], pathProof.Locs) {
+				err := errors.New("verify index path error")
+				return errors.Wrap(err, "verify space proofs error")
+			}
+			//check path proof
+			if !tree.VerifyPathProof(proof.Roots[i], proof.Proofs[i][j].Label, pathProof) {
+				err := errors.New("verify path proof error")
+				return errors.Wrap(err, "verify space proofs error")
+			}
 		}
-		pathProof := tree.PathProof{
-			Locs: proof.Proofs[i].Locs,
-			Path: proof.Proofs[i].Paths,
-		}
-		if !tree.VerifyPathProof(proof.Roots[i], proof.Proofs[i].Label, pathProof) {
-			err := errors.New("verify path proof error")
-			return errors.Wrap(err, "verify space proofs error")
-		}
-		util.CopyData(label, ID, expanders.GetBytes(chals[i][0]), proof.Roots[i])
+		util.CopyData(label, pNode.ID, expanders.GetBytes(proof.Left+int64(i)), proof.Roots[i])
 		if !bytes.Equal(expanders.GetHash(label), proof.WitChains[i].Elem) {
 			err := errors.New("verify file label error")
 			return errors.Wrap(err, "verify space proofs error")
@@ -359,6 +387,21 @@ func (v *Verifier) VerifySpace(ID []byte, chals [][]int64, proof *SpaceProof) er
 		}
 	}
 	return nil
+}
+
+func (v Verifier) SpaceVerificationHandle(ID []byte, acc []byte, Count int64) func(chals []int64, proof *SpaceProof) (bool, error) {
+	pNode := NewProverNode(ID, acc, Count)
+	return func(chals []int64, proof *SpaceProof) (bool, error) {
+		err := v.VerifySpace(pNode, chals, proof)
+		if err != nil {
+			return false, err
+		}
+		pNode.record = proof.Right - 1
+		if pNode.record == pNode.Count {
+			return true, nil
+		}
+		return false, nil
+	}
 }
 
 func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
