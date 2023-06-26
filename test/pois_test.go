@@ -15,7 +15,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
-	verifier := pois.NewVerifier(key, k, n, d)
+	verifier := pois.NewVerifier(k, n, d)
 
 	//run idle file generation server
 	prover.RunIdleFileGenerationServer(4)
@@ -37,7 +37,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key.G.Bytes(), 0)
+	verifier.RegisterProverNode(prover.ID, key, key.G.Bytes(), 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -115,7 +115,7 @@ func TestPois(t *testing.T) {
 
 	//deletion proof
 	ts = time.Now()
-	chProof, Err := prover.ProveDeletion(4 * 8)
+	chProof, Err := prover.ProveDeletion(4)
 	var delProof *pois.DeletionProof
 	select {
 	case err = <-Err:

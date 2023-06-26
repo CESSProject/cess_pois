@@ -23,6 +23,7 @@ var (
 )
 
 type Record struct {
+	Key    acc.RsaKey
 	Acc    []byte
 	Count  int64
 	record int64
@@ -37,18 +38,17 @@ type ProverNode struct {
 }
 
 type Verifier struct {
-	Key       acc.RsaKey
 	Expanders expanders.Expanders
 	Nodes     map[string]*ProverNode
 }
 
-func NewVerifier(key acc.RsaKey, k, n, d int64) *Verifier {
+func NewVerifier(k, n, d int64) *Verifier {
 	verifier = &Verifier{
-		Key:       key,
 		Expanders: *expanders.NewExpanders(k, n, d),
 		Nodes:     make(map[string]*ProverNode),
 	}
 	SpaceChals = int64(math.Log2(float64(n)))
+	tree.InitMhtPool(int(n), expanders.HashSize)
 	return verifier
 }
 
@@ -56,7 +56,7 @@ func GetVerifier() *Verifier {
 	return verifier
 }
 
-func (v *Verifier) RegisterProverNode(ID []byte, acc []byte, Count int64) {
+func (v *Verifier) RegisterProverNode(ID []byte, key acc.RsaKey, acc []byte, Count int64) {
 	id := hex.EncodeToString(ID)
 	var pNode *ProverNode
 	if node, ok := v.Nodes[id]; ok {
@@ -71,14 +71,16 @@ func (v *Verifier) RegisterProverNode(ID []byte, acc []byte, Count int64) {
 	pNode.CommitsBuf = make([]Commit, MaxBufSize)
 	pNode.Acc = acc
 	pNode.Count = Count
+	pNode.Key = key
 }
 
-func NewProverNode(ID []byte, acc []byte, Count int64) *ProverNode {
+func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, Count int64) *ProverNode {
 	return &ProverNode{
 		ID: ID,
 		Record: &Record{
 			Acc:   acc,
 			Count: Count,
+			Key:   key,
 		},
 	}
 }
@@ -336,7 +338,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 			return errors.Wrap(err, "verify acc proofs error")
 		}
 	}
-	if !acc.VerifyInsertUpdate(v.Key, proof.WitChains,
+	if !acc.VerifyInsertUpdate(pNode.Key, proof.WitChains,
 		proof.Labels, proof.AccPath, pNode.Acc) {
 		err := errors.New("verify muti-level acc error")
 		return errors.Wrap(err, "verify acc proofs error")
@@ -381,7 +383,7 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 			err := errors.New("verify file label error")
 			return errors.Wrap(err, "verify space proofs error")
 		}
-		if !acc.VerifyMutilevelAcc(v.Key, proof.WitChains[i], pNode.Acc) {
+		if !acc.VerifyMutilevelAcc(pNode.Key, proof.WitChains[i], pNode.Acc) {
 			err := errors.New("verify acc proof error")
 			return errors.Wrap(err, "verify space proofs error")
 		}
@@ -389,8 +391,8 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 	return nil
 }
 
-func (v Verifier) SpaceVerificationHandle(ID []byte, acc []byte, Count int64) func(chals []int64, proof *SpaceProof) (bool, error) {
-	pNode := NewProverNode(ID, acc, Count)
+func (v Verifier) SpaceVerificationHandle(ID []byte, key acc.RsaKey, acc []byte, Count int64) func(chals []int64, proof *SpaceProof) (bool, error) {
+	pNode := NewProverNode(ID, key, acc, Count)
 	return func(chals []int64, proof *SpaceProof) (bool, error) {
 		err := v.VerifySpace(pNode, chals, proof)
 		if err != nil {
@@ -427,7 +429,7 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 			expanders.GetBytes(pNode.Count-int64(lens-i-1)), proof.Roots[i])
 		labels[i] = expanders.GetHash(label)
 	}
-	if !acc.VerifyDeleteUpdate(v.Key, proof.WitChain,
+	if !acc.VerifyDeleteUpdate(pNode.Key, proof.WitChain,
 		labels, proof.AccPath, pNode.Acc) {
 		err := errors.New("verify acc proof error")
 		return errors.Wrap(err, "verify deletion proofs error")

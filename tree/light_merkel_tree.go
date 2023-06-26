@@ -20,6 +20,9 @@ type PathProof struct {
 var pool *sync.Pool
 
 func InitMhtPool(eLen, hashSize int) {
+	if pool != nil {
+		return
+	}
 	pool = &sync.Pool{
 		New: func() interface{} {
 			mht := make(LightMHT, eLen*hashSize)

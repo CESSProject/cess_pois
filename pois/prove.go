@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	FileSize             int64  = int64(expanders.HashSize)
-	IdleFilePath         string = expanders.DEFAULT_IDLE_FILES_PATH
-	AccPath              string = acc.DEFAULT_PATH
-	MaxCommitProofThread        = 16
+	FileSize       int64  = int64(expanders.HashSize)
+	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
+	AccPath        string = acc.DEFAULT_PATH
+	MaxProofThread        = 16
 )
 
 type Prover struct {
@@ -29,6 +29,7 @@ type Prover struct {
 	generated  int64
 	space      int64
 	rw         sync.RWMutex
+	prove      atomic.Bool
 	delete     atomic.Bool
 	update     atomic.Bool
 	generate   atomic.Bool
@@ -161,6 +162,10 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			err = errors.New("no delete task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
+		if p.prove.Load() {
+			err = errors.New("space challenge in progress, try again later")
+			return errors.Wrap(err, "updat prover status error")
+		}
 		err = p.deleteFiles(num, false)
 		num = -num
 	} else {
@@ -176,6 +181,14 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 	p.count += num
 	p.AccManager.UpdateSnapshot()
 	return nil
+}
+
+func (p *Prover) IsProvingSpace() bool {
+	return p.prove.Load()
+}
+
+func (p *Prover) SetProveSpace(sig bool) bool {
+	return p.prove.CompareAndSwap(!sig, sig)
 }
 
 // AddSpace add size MiB space to available space, generally used to return user file space
@@ -200,6 +213,10 @@ func (p *Prover) GetCount() int64 {
 func (p *Prover) UpdateChainState() {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
+	//If doing Proof of Space at this time, you are not allowed to update the chain state
+	if p.prove.Load() {
+		return
+	}
 	p.chainState.Acc = p.AccManager.GetSnapshot()
 	p.chainState.Count = p.count
 }
@@ -285,10 +302,10 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 		err     error
 	)
 	lens := len(challenges)
-	if lens < MaxCommitProofThread {
+	if lens < MaxProofThread {
 		threads = lens
 	} else {
-		threads = MaxCommitProofThread
+		threads = MaxProofThread
 	}
 	proofSet := make([][]CommitProof, lens)
 
@@ -487,37 +504,59 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	proof.Left = left
 	proof.Right = right
 	indexs := make([]int64, right-left)
-	data := p.Expanders.FilePool.Get().(*[]byte)
-
-	for i := left; i < right; i++ {
-		if err := p.ReadFileLabels(i, *data); err != nil {
-			return nil, errors.Wrap(err, "prove space error")
-		}
-		mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-		indexs[i-left] = i
-		proof.Roots[i-left] = mht.GetRoot(expanders.HashSize)
-		proof.Proofs[i-left] = make([]*MhtProof, len(challenges))
-		for j := 0; j < len(challenges); j++ {
-			idx := int(challenges[j] % p.Expanders.N)
-			pathProof, err := mht.GetPathProof(*data, idx, expanders.HashSize)
-			if err != nil {
-				if err != nil {
-					return nil, errors.Wrap(err, "prove space error")
-				}
-			}
-			label := make([]byte, expanders.HashSize)
-			copy(label, (*data)[idx*expanders.HashSize:(idx+1)*expanders.HashSize])
-			proof.Proofs[i-left][j] = &MhtProof{
-				Paths: pathProof.Path,
-				Locs:  pathProof.Locs,
-				Index: expanders.NodeType(challenges[j]),
-				Label: label,
-			}
-		}
-		tree.RecoveryMht(mht)
-
+	threads := MaxProofThread
+	if right-left < int64(threads) {
+		threads = int(right - left)
 	}
-	p.Expanders.FilePool.Put(data)
+	ch := make(chan int64, right-left)
+	for i := left; i < right; i++ {
+		ch <- i
+	}
+	close(ch)
+	wg := sync.WaitGroup{}
+	wg.Add(threads)
+	for i := 0; i < threads; i++ {
+		go func() {
+			defer wg.Done()
+			data := p.Expanders.FilePool.Get().(*[]byte)
+			defer p.Expanders.FilePool.Put(data)
+			for fidx := range ch {
+				if fidx == 0 {
+					break
+				}
+				if err := p.ReadFileLabels(fidx, *data); err != nil {
+					return
+				}
+				mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
+				indexs[fidx-left] = fidx
+				proof.Roots[fidx-left] = mht.GetRoot(expanders.HashSize)
+				proof.Proofs[fidx-left] = make([]*MhtProof, len(challenges))
+				for j := 0; j < len(challenges); j++ {
+					idx := int(challenges[j] % p.Expanders.N)
+					pathProof, err := mht.GetPathProof(*data, idx, expanders.HashSize)
+					if err != nil {
+						if err != nil {
+							return
+						}
+					}
+					label := make([]byte, expanders.HashSize)
+					copy(label, (*data)[idx*expanders.HashSize:(idx+1)*expanders.HashSize])
+					proof.Proofs[fidx-left][j] = &MhtProof{
+						Paths: pathProof.Path,
+						Locs:  pathProof.Locs,
+						Index: expanders.NodeType(challenges[j]),
+						Label: label,
+					}
+				}
+				tree.RecoveryMht(mht)
+			}
+		}()
+	}
+
+	wg.Wait()
+	if err != nil {
+		return nil, errors.Wrap(err, "prove space error")
+	}
 	proof.WitChains, err = p.chainState.Acc.GetWitnessChains(indexs)
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
@@ -529,8 +568,6 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 // it subtracts all unused and uncommitted space, and deletes enough idle files to make room,
 // so the number of idle files actually deleted is the length of DeletionProof.Roots,
 // you need to update prover status with this value rather than num after the verification is successful.
-// If the data read from the two channels returned by the method are empty,
-// it means that enough space has been sorted out and no other operations are required
 func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 	ch := make(chan *DeletionProof, 1)
 	Err := make(chan error, 1)
@@ -545,35 +582,6 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 
 		for p.generate.Load() || p.update.Load() || p.added > p.generated {
 			//wait for all updates to complete
-		}
-		//If the unauthenticated space is large enough, there is no need to delete idle files
-		if size := FileSize * num; size <= p.space {
-			p.space -= size
-			ch <- nil
-			Err <- nil
-			return
-		}
-		num -= p.space / FileSize
-		p.space = 0
-		//If the uncommitted space is large enough, delete num uncommitted idle files
-		fnum := (p.generated - p.commited)
-		if fnum*(p.Expanders.K+1) >= num {
-			err := p.deleteFiles((num+p.Expanders.K)/(p.Expanders.K+1), true)
-			if err != nil {
-				Err <- errors.Wrap(err, "prove deletion error")
-			}
-			p.space -= num * FileSize
-			ch <- nil
-			return
-		} else if fnum > 0 {
-			num -= fnum * (p.Expanders.K + 1)
-			err := p.deleteFiles(fnum, true)
-			if err != nil {
-				ch <- nil
-				Err <- errors.Wrap(err, "prove deletion error")
-				return
-			}
-			p.space -= fnum * (p.Expanders.K + 1) * FileSize
 		}
 		p.rw.Lock()
 		if p.count < num {

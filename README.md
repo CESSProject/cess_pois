@@ -25,10 +25,9 @@ import (
     "cess_pos_demo/expanders"
 )
 
-// key is cess_pos_demo.acc.RsaKey,be created by tee worker first.
 // k,n,d respectively represent the number of layers of expanders, the number of nodes in each layer and the in-degree of each node.
 // k,n,d are always set to 7, 1024*1024 and 64.
-verifier:=pois.NewVerifier(key, k,n,d)
+verifier:=pois.NewVerifier(k,n,d)
 
 // init mht object pool to reduce memory allocation
 // n is the number of nodes in each layer,HashSize indicates the size of each element,the default is 64 (bytes) Generally. 
@@ -44,9 +43,10 @@ So before using Proof of Space, you need to register miners.
 ok:=verifier.IsLogout(minerID)
 //ok means the miner is not registered or has left
 if ok{ 
-//minerID is storage miner's accountId,it is a byte slice
-//acc and count are storage miner's info from chain
-verifier.RegisterProverNode(minerID,acc,count)
+    // key is cess_pos_demo.acc.RsaKey,be created by tee worker first.
+    //minerID is storage miner's accountId,it is a byte slice
+    //acc and count are storage miner's info from chain
+    verifier.RegisterProverNode(minerID,key,acc,count)
 }
 
 ```
