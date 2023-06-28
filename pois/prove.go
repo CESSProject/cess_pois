@@ -22,14 +22,12 @@ var (
 )
 
 type Prover struct {
-	Expanders  *expanders.Expanders
-	count      int64
-	commited   int64
-	added      int64
-	generated  int64
-	space      int64
+	Expanders *expanders.Expanders
+	rear      int64
+	front     int64
+	space     int64
+	context
 	rw         sync.RWMutex
-	prove      atomic.Bool
 	delete     atomic.Bool
 	update     atomic.Bool
 	generate   atomic.Bool
@@ -40,9 +38,17 @@ type Prover struct {
 	AccManager acc.AccHandle
 }
 
+type context struct {
+	commited  int64
+	added     int64
+	generated int64
+	proofed   int64
+}
+
 type ChainState struct {
 	Acc   acc.AccHandle
-	Count int64
+	Rear  int64
+	Front int64
 }
 
 type MhtProof struct {
@@ -99,10 +105,15 @@ func NewProver(k, n, d int64, ID []byte, key acc.RsaKey, space int64) (*Prover, 
 	prover.AccManager, err = acc.NewMutiLevelAcc(AccPath, key)
 	prover.chainState = &ChainState{
 		Acc:   prover.AccManager.GetSnapshot(),
-		Count: 0,
+		Rear:  0,
+		Front: 0,
 	}
 	prover.space = space
 	return prover, errors.Wrap(err, "init prover error")
+}
+
+func Recovery() *Prover {
+	return nil
 }
 
 // GenerateFile notifies the idle file generation service to generate the specified number of files,
@@ -112,9 +123,7 @@ func (p *Prover) GenerateFile(num int64) bool {
 		p.space < num*FileSize*(p.Expanders.K+1) {
 		return false
 	}
-	if p.delete.Load() {
-		return false
-	}
+
 	if !p.generate.CompareAndSwap(false, true) {
 		return false
 	}
@@ -135,7 +144,8 @@ func (p *Prover) CommitRollback(num int64) bool {
 	return false
 }
 
-// AccRollback need to be invoked when submit or verify acc proof failure
+// AccRollback need to be invoked when submit or verify acc proof failure,
+// the update of the accumulator is serial and blocking, you need to update or roll back in time.
 func (p *Prover) AccRollback(isDel bool) bool {
 	if isDel {
 		if !p.delete.CompareAndSwap(true, false) {
@@ -147,7 +157,8 @@ func (p *Prover) AccRollback(isDel bool) bool {
 	return p.AccManager.RollBack()
 }
 
-// UpdateCount need to be invoked after verify commit proof and acc proof success
+// UpdateStatus need to be invoked after verify commit proof and acc proof success,
+// the update of the accumulator is serial and blocking, you need to update or roll back in time.
 func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 	var err error
 	p.rw.Lock()
@@ -162,41 +173,31 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			err = errors.New("no delete task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		if p.prove.Load() {
-			err = errors.New("space challenge in progress, try again later")
+		if p.proofed > 0 && p.proofed < p.front+num-1 {
+			err = errors.New("proving space proofs is not complete")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		err = p.deleteFiles(num, false)
-		num = -num
+
+		if err = p.deleteFiles(num, false); err != nil {
+			return errors.Wrap(err, "updat prover status error")
+		}
+		p.front += num
 	} else {
 		if !p.update.CompareAndSwap(true, false) {
 			err = errors.New("no update task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		err = p.organizeFiles(num)
+
+		if err = p.organizeFiles(num); err != nil {
+			return errors.Wrap(err, "updat prover status error")
+		}
+		p.rear += num
+		if p.front == 0 {
+			p.front = 1
+		}
 	}
-	if err != nil {
-		return errors.Wrap(err, "updat prover status error")
-	}
-	p.count += num
 	p.AccManager.UpdateSnapshot()
 	return nil
-}
-
-func (p *Prover) IsProvingSpace() bool {
-	return p.prove.Load()
-}
-
-func (p *Prover) SetProveSpace(sig bool) bool {
-	return p.prove.CompareAndSwap(!sig, sig)
-}
-
-// AddSpace add size MiB space to available space, generally used to return user file space
-func (p *Prover) AddSpace(size int64) {
-	if size <= 0 {
-		return
-	}
-	p.space += size
 }
 
 func (p *Prover) GetSpace() int64 {
@@ -204,32 +205,35 @@ func (p *Prover) GetSpace() int64 {
 }
 
 // GetCount get Count Safely
-func (p *Prover) GetCount() int64 {
+func (p *Prover) GetRear() int64 {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
-	return p.count
+	return p.rear
+}
+
+func (p *Prover) GetFront() int64 {
+	p.rw.RLock()
+	defer p.rw.RUnlock()
+	return p.front
+}
+
+// RestProofedCounter must be called when space proof is finished
+func (p *Prover) RestProofedCounter() {
+	p.rw.Lock()
+	defer p.rw.Unlock()
+	p.proofed = 0
 }
 
 func (p *Prover) UpdateChainState() {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
 	//If doing Proof of Space at this time, you are not allowed to update the chain state
-	if p.prove.Load() {
-		return
-	}
 	p.chainState.Acc = p.AccManager.GetSnapshot()
-	p.chainState.Count = p.count
+	p.chainState.Rear = p.rear
+	p.chainState.Front = p.front
 }
 
-func (p *Prover) GetNewChainStates() ([]byte, int64) {
-	p.rw.RLock()
-	defer p.rw.RUnlock()
-	acc := p.AccManager.GetSnapshot().Accs.Value
-	count := p.count
-	return acc, count
-}
-
-// RunIdleFileGenerationServer start the specified number of goroutines to generate idle files
+// RunIdleFileGenerationServer be used to start idle file generation server
 func (p *Prover) RunIdleFileGenerationServer(threadNum int) {
 	tree.InitMhtPool(int(p.Expanders.N), expanders.HashSize)
 	p.cmdCh, p.resCh = expanders.IdleFileGenerationServer(p.Expanders,
@@ -247,9 +251,6 @@ func (p *Prover) RunIdleFileGenerationServer(threadNum int) {
 // GetCommits can not run concurrently!
 func (p *Prover) GetCommits(num int64) ([]Commit, error) {
 	var err error
-	if p.delete.Load() {
-		return nil, nil
-	}
 	if !p.update.CompareAndSwap(false, true) {
 		return nil, nil
 	}
@@ -491,7 +492,8 @@ func (p *Prover) generateCommitProof(fdir string, count, c int64) (CommitProof, 
 
 func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof, error) {
 	var err error
-	if len(challenges) <= 0 || right-left <= 0 {
+	if len(challenges) <= 0 || right-left <= 0 ||
+		left < p.chainState.Front || right > p.chainState.Rear+1 {
 		err := errors.New("bad challenge range")
 		return nil, errors.Wrap(err, "prove space error")
 	}
@@ -516,7 +518,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	wg := sync.WaitGroup{}
 	wg.Add(threads)
 	for i := 0; i < threads; i++ {
-		go func() {
+		ants.Submit(func() {
 			defer wg.Done()
 			data := p.Expanders.FilePool.Get().(*[]byte)
 			defer p.Expanders.FilePool.Put(data)
@@ -550,7 +552,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 				}
 				tree.RecoveryMht(mht)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -561,6 +563,9 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
 	}
+	p.rw.Lock()
+	p.proofed = right - 1
+	p.rw.Unlock()
 	return proof, nil
 }
 
@@ -578,31 +583,25 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 	}
 	go func() {
 		p.delete.Store(true)
-		var tmp int64
-
-		for p.generate.Load() || p.update.Load() || p.added > p.generated {
-			//wait for all updates to complete
-		}
 		p.rw.Lock()
-		if p.count < num {
+		if p.rear-p.front+1 < num {
 			p.rw.Unlock()
 			ch <- nil
 			err := errors.New("insufficient operating space")
 			Err <- errors.Wrap(err, "prove deletion error")
 			return
 		}
-		tmp = p.count - num
 		p.rw.Unlock()
 		data := p.Expanders.FilePool.Get().(*[]byte)
 		defer p.Expanders.FilePool.Put(data)
 		roots := make([][]byte, num)
-		for i := int64(1); i <= num; i++ {
-			if err := p.ReadFileLabels(tmp+i, *data); err != nil {
+		for i := int64(0); i < num; i++ {
+			if err := p.ReadFileLabels(p.front+i, *data); err != nil {
 				Err <- errors.Wrap(err, "prove deletion error")
 				return
 			}
 			mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-			roots[i-1] = mht.GetRoot(expanders.HashSize)
+			roots[i] = mht.GetRoot(expanders.HashSize)
 			tree.RecoveryMht(mht)
 		}
 		wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
@@ -621,7 +620,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 }
 
 func (p *Prover) organizeFiles(num int64) error {
-	for i := p.count + 1; i <= p.count+num; i++ {
+	for i := p.rear + 1; i <= p.rear+num; i++ {
 		dir := path.Join(IdleFilePath,
 			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, i))
 		for j := 0; j < int(p.Expanders.K); j++ {
@@ -640,10 +639,9 @@ func (p *Prover) organizeFiles(num int64) error {
 }
 
 func (p *Prover) deleteFiles(num int64, raw bool) error {
-	index := p.count - num
-	for i := int64(1); i <= num; i++ {
+	for i := int64(0); i < num; i++ {
 		dir := path.Join(IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, index+i))
+			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, p.front+i))
 		if err := util.DeleteDir(dir); err != nil {
 			return errors.Wrap(err, "delete files error")
 		}

@@ -37,7 +37,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, key.G.Bytes(), 0)
+	verifier.RegisterProverNode(prover.ID, key, key.G.Bytes(), 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -125,9 +125,11 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("prove deletion proof time", time.Since(ts))
 
-	if delProof == nil {
+	if delProof == nil && err == nil {
 		t.Log("no need to prove deletion proof.")
 		return
+	} else if err != nil {
+		t.Fatal("prove deletion proof error", err)
 	}
 
 	//verify deletion proof

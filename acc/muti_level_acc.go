@@ -3,25 +3,26 @@ package acc
 import (
 	"bytes"
 	"cess_pois/util"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"os"
 	"path"
-	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
 const (
-	DEFAULT_PATH      = "./acc/"
-	DEFAULT_DIR_PERM  = 0777
-	DEFAULT_ELEMS_NUM = 1024
-	DEFAULT_LEVEL     = 3
-	DEFAULT_NAME      = "sub-acc"
+	DEFAULT_PATH        = "./acc/"
+	DEFAULT_DIR_PERM    = 0777
+	DEFAULT_ELEMS_NUM   = 1024
+	DEFAULT_LEVEL       = 3
+	DEFAULT_NAME        = "sub-acc"
+	DEFAULT_BACKUP_NAME = "backup-sub-acc"
+	TIMEOUT             = time.Minute * 2
 )
 
 type AccHandle interface {
@@ -63,13 +64,38 @@ type MutiLevelAcc struct {
 	Accs      *AccNode
 	Key       RsaKey
 	ElemNums  int
+	Deleted   int
 	CurrCount int
 	Curr      *AccNode
 	Parent    *AccNode
 	rw        *sync.RWMutex
 	isUpdate  bool
+	stable    bool
+	isDel     atomic.Bool
 	snapshot  *MutiLevelAcc
 	FilePath  string
+}
+
+func Recovery(path string, key RsaKey, front, rear int64) AccHandle {
+	if path == "" {
+		path = DEFAULT_PATH
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	acc := &AccNode{
+		Value: key.G.Bytes(),
+	}
+	_AccManager = &MutiLevelAcc{
+		Accs:     acc,
+		Key:      key,
+		rw:       new(sync.RWMutex),
+		FilePath: path,
+		stable:   true,
+		Deleted:  int(front - 1),
+	}
+
+	return nil
 }
 
 func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
@@ -90,6 +116,7 @@ func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
 		Key:      key,
 		rw:       new(sync.RWMutex),
 		FilePath: path,
+		stable:   true,
 	}
 	return _AccManager, nil
 }
@@ -108,12 +135,17 @@ func (acc *MutiLevelAcc) GetSnapshot() *MutiLevelAcc {
 }
 
 func (acc *MutiLevelAcc) UpdateSnapshot() bool {
-	acc.rw.RLock()
-	defer acc.rw.RUnlock()
+	acc.rw.Lock()
+	defer acc.rw.Unlock()
 	if acc.isUpdate {
 		return false
 	}
 	acc.createSnapshot()
+	acc.stable = true
+	//delete buckup file
+	index := acc.Deleted / DEFAULT_ELEMS_NUM
+	backup := path.Join(acc.FilePath, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
+	util.DeleteFile(backup)
 	return true
 }
 
@@ -124,6 +156,7 @@ func (acc *MutiLevelAcc) RollBack() bool {
 		return false
 	}
 	acc.copy(acc.snapshot)
+	acc.stable = true
 	return true
 }
 
@@ -156,12 +189,13 @@ func (acc *MutiLevelAcc) setUpdate(yes bool) bool {
 	acc.rw.Lock()
 	defer acc.rw.Unlock()
 	//two or more updates at the same time are not allowed
-	if acc.isUpdate && yes {
+	if yes && (acc.isUpdate || !acc.stable) {
 		return false
 	}
 	if yes {
 		acc.createSnapshot()
 		acc.isUpdate = true
+		acc.stable = false
 		return true
 	}
 	//acc.createSnapshot()
@@ -193,9 +227,8 @@ func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "add elements error")
 	}
-	if !acc.setUpdate(true) {
-		err := errors.New("update permission is occupied")
-		return errors.Wrap(err, "add elements error")
+	for acc.isDel.Load() || !acc.setUpdate(true) {
+		time.Sleep(time.Second * 2)
 	}
 	defer acc.setUpdate(false)
 	newAcc, err := acc.addElements(elems)
@@ -213,8 +246,8 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 	)
 	node := &AccNode{}
 	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
-		index := (acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
-		data, err = readAccData(DEFAULT_PATH, index)
+		index := (acc.Deleted + acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
+		data, err = readAccData(acc.FilePath, index)
 		if err != nil {
 			return nil, errors.Wrap(err, "add elements to sub acc error")
 		}
@@ -229,8 +262,8 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 		acc.Key, data.Wits[node.Len-1],
 		[][]byte{data.Values[node.Len-1]},
 	)
-	index := ((acc.ElemNums + len(elems)) - 1) / DEFAULT_ELEMS_NUM
-	err = saveAccData(DEFAULT_PATH, index, data.Values, data.Wits)
+	index := ((acc.Deleted + acc.ElemNums + len(elems)) - 1) / DEFAULT_ELEMS_NUM
+	err = saveAccData(acc.FilePath, index, data.Values, data.Wits)
 	return node, errors.Wrap(err, "add elements to sub acc error")
 }
 
@@ -279,55 +312,61 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 }
 
 func (acc *MutiLevelAcc) DeleteElements(num int) error {
-	if num <= 0 || acc.CurrCount > 0 && num > acc.CurrCount ||
-		num > DEFAULT_ELEMS_NUM {
+
+	index := acc.Deleted / DEFAULT_ELEMS_NUM
+	offset := acc.Deleted % DEFAULT_ELEMS_NUM
+	if num <= 0 || num > acc.ElemNums || num+offset > DEFAULT_ELEMS_NUM {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "delete elements error")
 	}
-	if !acc.setUpdate(true) {
-		err := errors.New("update permission is occupied")
+	acc.isDel.Store(true)
+	for !acc.setUpdate(true) {
+		time.Sleep(time.Second * 2)
+	}
+	acc.isDel.Store(false)
+	defer acc.setUpdate(false)
+
+	//read data from disk
+	data, err := readAccData(acc.FilePath, index)
+	if err != nil {
 		return errors.Wrap(err, "delet elements error")
 	}
-	defer acc.setUpdate(false)
-	if num < acc.CurrCount {
-		index := (acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
-		data, err := readAccData(DEFAULT_PATH, index)
-		if err != nil {
-			return errors.Wrap(err, "delet elements error")
-		}
-		data.Values = data.Values[:acc.CurrCount-num]
+	//buckup file
+	err = backupAccData(acc.FilePath, index)
+	if err != nil {
+		return errors.Wrap(err, "delet elements error")
+	}
+
+	//delete elements from acc and update acc
+	if num < len(data.Values) {
+		data.Values = data.Values[num:]
 		data.Wits = generateWitness(acc.Key.G, acc.Key.N, data.Values)
-		err = saveAccData(DEFAULT_PATH, index, data.Values, data.Wits)
+		err = saveAccData(acc.FilePath, index, data.Values, data.Wits)
 		if err != nil {
 			return errors.Wrap(err, "delet elements error")
 		}
-		acc.Curr.Len = acc.CurrCount - num
-		acc.CurrCount = acc.Curr.Len
-		acc.Curr.Value = generateAcc(
-			acc.Key, data.Wits[acc.CurrCount-1],
-			[][]byte{data.Values[acc.CurrCount-1]},
-		)
+		acc.Accs.Children[0].Children[0].Len -= num
+		len := acc.Accs.Children[0].Children[0].Len
+		acc.Accs.Children[0].Children[0].Value = generateAcc(
+			acc.Key, data.Wits[len-1],
+			[][]byte{data.Values[len-1]})
 	} else {
-		index := (acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
-		err := deleteAccData(DEFAULT_PATH, index)
-		if err != nil {
+
+		if err = deleteAccData(acc.FilePath, index); err != nil {
 			return errors.Wrap(err, "delet elements error")
 		}
-		acc.Parent.Children = acc.Parent.Children[:acc.Parent.Len-1]
-		acc.Parent.Len -= 1
-		if acc.Parent.Len == 0 && acc.Accs.Len >= 1 {
-			acc.Accs.Children = acc.Accs.Children[:acc.Accs.Len-1]
+
+		//update mid-level acc
+		acc.Accs.Children[0].Children = acc.Accs.Children[0].Children[1:]
+		acc.Accs.Children[0].Len -= 1
+		if acc.Accs.Children[0].Len == 0 && acc.Accs.Len >= 1 {
+			acc.Accs.Children = acc.Accs.Children[1:]
 			acc.Accs.Len -= 1
-			if acc.Accs.Len > 0 {
-				acc.Parent = acc.Accs.Children[acc.Accs.Len-1]
-			} else {
-				acc.Parent = nil
-			}
 		}
-		if acc.Parent != nil && acc.Parent.Len >= 1 {
-			acc.Curr = acc.Parent.Children[acc.Parent.Len-1]
-			acc.CurrCount = acc.Curr.Len
-		} else {
+
+		//update top-level acc
+		if acc.Accs.Len == 0 {
+			acc.Parent = nil
 			acc.Curr = nil
 			acc.CurrCount = 0
 		}
@@ -337,6 +376,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 	acc.updateAcc(acc.Parent)
 	//update parents and top acc
 	acc.updateAcc(acc.Accs)
+	acc.Deleted += num
 	return nil
 }
 
@@ -354,125 +394,6 @@ func copyAccNode(src *AccNode, target *AccNode) {
 		target.Children[i] = &AccNode{}
 		copyAccNode(src.Children[i], target.Children[i])
 	}
-}
-
-// Generate the accumulator
-func generateAcc(key RsaKey, acc []byte, elems [][]byte) []byte {
-	if acc == nil {
-		return nil
-	}
-	G := new(big.Int).SetBytes(acc)
-	for _, elem := range elems {
-		prime := Hprime(*new(big.Int).SetBytes(elem))
-		G.Exp(G, &prime, &key.N)
-	}
-	return G.Bytes()
-}
-
-func generateWitness(G, N big.Int, us [][]byte) [][]byte {
-	if len(us) == 0 {
-		return nil
-	}
-	if len(us) == 1 {
-		return [][]byte{G.Bytes()}
-	}
-	left, right := us[:len(us)/2], us[len(us)/2:]
-	g1, g2 := G, G
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for _, u := range right {
-			e := Hprime(*new(big.Int).SetBytes(u))
-			g1.Exp(&g1, &e, &N)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for _, u := range left {
-			e := Hprime(*new(big.Int).SetBytes(u))
-			g2.Exp(&g2, &e, &N)
-		}
-	}()
-	wg.Wait()
-	u1 := generateWitness(g1, N, left)
-	u2 := generateWitness(g2, N, right)
-	return append(u1, u2...)
-}
-
-func genWitsForAccNodes(G, N big.Int, elems []*AccNode) {
-	lens := len(elems)
-	if lens <= 0 {
-		return
-	}
-	if lens == 1 {
-		elems[0].Wit = G.Bytes()
-		return
-	}
-	left, right := elems[:lens/2], elems[lens/2:]
-	g1, g2 := G, G
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for _, u := range right {
-			e := Hprime(*new(big.Int).SetBytes(u.Value))
-			g1.Exp(&g1, &e, &N)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for _, u := range left {
-			e := Hprime(*new(big.Int).SetBytes(u.Value))
-			g2.Exp(&g2, &e, &N)
-		}
-	}()
-	wg.Wait()
-	genWitsForAccNodes(g1, N, left)
-	genWitsForAccNodes(g2, N, right)
-}
-
-func saveAccData(dir string, index int, elems, wits [][]byte) error {
-	data := AccData{
-		Values: elems,
-		Wits:   wits,
-	}
-	jbytes, err := json.Marshal(data)
-	if err != nil {
-		return errors.Wrap(err, "save element data error")
-	}
-	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
-	return util.SaveFile(fpath, jbytes)
-}
-
-func readAccData(dir string, index int) (*AccData, error) {
-	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
-	data, err := util.ReadFile(fpath)
-	if err != nil {
-		return nil, errors.Wrap(err, "read element data error")
-	}
-	accData := &AccData{}
-	err = json.Unmarshal(data, accData)
-	return accData, errors.Wrap(err, "read element data error")
-}
-
-// deleteAccData delete from the given index
-func deleteAccData(dir string, last int) error {
-	fs, err := os.ReadDir(dir)
-	if err != nil {
-		return errors.Wrap(err, "delete element data error")
-	}
-	for _, f := range fs {
-		slice := strings.Split(f.Name(), "-")
-		index, err := strconv.Atoi(slice[len(slice)-1])
-		if err != nil {
-			return errors.Wrap(err, "delete element data error")
-		}
-		if index >= last {
-			util.DeleteFile(path.Join(dir, f.Name()))
-		}
-	}
-	return nil
 }
 
 func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error) {
@@ -512,7 +433,7 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if i < DEFAULT_LEVEL {
 		return nil, errors.New("get witness node error")
 	}
-	data, err := readAccData(DEFAULT_PATH, int((index-1)/DEFAULT_ELEMS_NUM))
+	data, err := readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
 	if err != nil {
 		return nil, err
 	}
@@ -627,13 +548,17 @@ func VerifyInsertUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, ac
 // DeleteElementsAndProof delete elements from muti-level acc and create proof of deleted elements
 func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte, error) {
 
+	if acc.ElemNums == 0 {
+		err := errors.New("delete null set")
+		return nil, nil, errors.Wrap(err, "proof acc delete error")
+	}
 	//Before deleting elements, get their chain of witness
 	exist := &WitnessNode{
-		Elem: acc.Curr.Value,
-		Wit:  acc.Curr.Wit,
+		Elem: acc.Accs.Children[0].Children[0].Value,
+		Wit:  acc.Accs.Children[0].Children[0].Wit,
 		Acc: &WitnessNode{
-			Elem: acc.Parent.Value,
-			Wit:  acc.Parent.Wit,
+			Elem: acc.Accs.Children[0].Value,
+			Wit:  acc.Accs.Children[0].Wit,
 			Acc:  &WitnessNode{Elem: acc.Accs.Value},
 		},
 	}
@@ -656,7 +581,7 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 			break
 		}
 		count++
-		p, q = p.Children[p.Len-1], q.Children[q.Len-1]
+		p, q = p.Children[0], q.Children[0]
 		accs[DEFAULT_LEVEL-count] = p.Value
 	}
 	return exist, accs, nil
@@ -690,4 +615,23 @@ func VerifyDeleteUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, ac
 		count++
 	}
 	return true
+}
+
+func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
+
+	for i := 0; i < (int(rear)-acc.Deleted)/DEFAULT_ELEMS_NUM; i++ {
+		index := acc.Deleted/DEFAULT_ELEMS_NUM + i
+		data, err := readAccData(acc.FilePath, index)
+		if err != nil {
+			return err
+		}
+		node := &AccNode{}
+		node.Len = len(data.Values)
+		node.Value = generateAcc(
+			acc.Key, data.Wits[node.Len-1],
+			[][]byte{data.Values[node.Len-1]},
+		)
+		acc.addSubAcc(node)
+	}
+	return nil
 }

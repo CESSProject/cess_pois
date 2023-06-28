@@ -12,6 +12,7 @@ import (
 	"path"
 	"unsafe"
 
+	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
 )
 
@@ -128,7 +129,7 @@ func (expanders *Expanders) GenerateIdleFile(minerID []byte, Count int64, rootDi
 func IdleFileGenerationServer(expanders *Expanders, minerID []byte, rootDir string, tNum int) (chan<- int64, <-chan bool) {
 	in, out := make(chan int64, tNum), make(chan bool, tNum)
 	for i := 0; i < tNum; i++ {
-		go func() {
+		ants.Submit(func() {
 			for count := range in {
 				if count <= 0 {
 					close(out)
@@ -140,7 +141,7 @@ func IdleFileGenerationServer(expanders *Expanders, minerID []byte, rootDir stri
 				}
 				out <- true
 			}
-		}()
+		})
 	}
 	return in, out
 }

@@ -25,7 +25,8 @@ var (
 type Record struct {
 	Key    acc.RsaKey
 	Acc    []byte
-	Count  int64
+	Front  int64
+	Rear   int64
 	record int64
 }
 
@@ -56,30 +57,20 @@ func GetVerifier() *Verifier {
 	return verifier
 }
 
-func (v *Verifier) RegisterProverNode(ID []byte, key acc.RsaKey, acc []byte, Count int64) {
+func (v *Verifier) RegisterProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) {
 	id := hex.EncodeToString(ID)
-	var pNode *ProverNode
-	if node, ok := v.Nodes[id]; ok {
-		pNode = node
-	} else {
-		pNode = &ProverNode{
-			Record: &Record{},
-		}
-		v.Nodes[id] = pNode
-	}
-	pNode.ID = ID
-	pNode.CommitsBuf = make([]Commit, MaxBufSize)
-	pNode.Acc = acc
-	pNode.Count = Count
-	pNode.Key = key
+	node := NewProverNode(ID, key, acc, front, rear)
+	node.CommitsBuf = make([]Commit, MaxBufSize)
+	v.Nodes[id] = node
 }
 
-func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, Count int64) *ProverNode {
+func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) *ProverNode {
 	return &ProverNode{
 		ID: ID,
 		Record: &Record{
 			Acc:   acc,
-			Count: Count,
+			Front: front,
+			Rear:  rear,
 			Key:   key,
 		},
 	}
@@ -96,16 +87,17 @@ func (v *Verifier) IsLogout(ID []byte) bool {
 	return !ok
 }
 
-func (v *Verifier) LogoutProverNode(ID []byte) ([]byte, int64) {
+func (v *Verifier) LogoutProverNode(ID []byte) ([]byte, int64, int64) {
 	id := hex.EncodeToString(ID)
 	node, ok := v.Nodes[id]
 	if !ok {
-		return nil, 0
+		return nil, 0, 0
 	}
 	acc := node.Acc
-	count := node.Count
+	front := node.Front
+	rear := node.Rear
 	delete(v.Nodes, id)
-	return acc, count
+	return acc, front, rear
 }
 
 func (v *Verifier) ReceiveCommits(ID []byte, commits []Commit) bool {
@@ -121,6 +113,11 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits []Commit) bool {
 	}
 	hash := expanders.NewHash()
 	for i := 0; i < len(commits); i++ {
+
+		if commits[i].FileIndex <= pNode.Rear {
+			return false
+		}
+
 		if len(commits[i].Roots) != int(v.Expanders.K+2) {
 			return false
 		}
@@ -145,7 +142,7 @@ func (v *Verifier) CommitChallenges(ID []byte, left, right int) ([][]int64, erro
 		err := errors.New("prover node not found")
 		return nil, errors.Wrap(err, "generate commit challenges error")
 	}
-	if right-left <= 0 || right > pNode.BufSize || left < 0 {
+	if right-left <= 0 || right > pNode.BufSize || left < int(pNode.Front) {
 		err := errors.New("bad file number")
 		return nil, errors.Wrap(err, "generate commit challenges error")
 	}
@@ -327,7 +324,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 	}
 	label := make([]byte, len(ID)+8+expanders.HashSize)
 	for i := 0; i < len(chals); i++ {
-		if chals[i][0] != proof.Indexs[i] && chals[i][0] != pNode.Count+int64(i)+1 {
+		if chals[i][0] != proof.Indexs[i] && chals[i][0] != pNode.Rear+int64(i)+1 {
 			err := errors.New("bad file index")
 			return errors.Wrap(err, "verify acc proofs error")
 		}
@@ -347,12 +344,15 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 	pNode.CommitsBuf = append(pNode.CommitsBuf[:index],
 		pNode.CommitsBuf[index+len(chals):]...)
 	pNode.BufSize -= len(chals)
-	pNode.Count += int64(len(chals))
+	pNode.Rear += int64(len(chals))
+	if pNode.Front == 0 {
+		pNode.Front = 1
+	}
 	return nil
 }
 
 func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpaceProof) error {
-	if len(chals) <= 0 || pNode.record+1 != proof.Left || pNode.Count+1 < proof.Right {
+	if len(chals) <= 0 || pNode.record+1 != proof.Left || pNode.Rear+1 < proof.Right {
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify space proofs error")
 	}
@@ -391,15 +391,15 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 	return nil
 }
 
-func (v Verifier) SpaceVerificationHandle(ID []byte, key acc.RsaKey, acc []byte, Count int64) func(chals []int64, proof *SpaceProof) (bool, error) {
-	pNode := NewProverNode(ID, key, acc, Count)
+func (v Verifier) SpaceVerificationHandle(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) func(chals []int64, proof *SpaceProof) (bool, error) {
+	pNode := NewProverNode(ID, key, acc, front, rear)
 	return func(chals []int64, proof *SpaceProof) (bool, error) {
 		err := v.VerifySpace(pNode, chals, proof)
 		if err != nil {
 			return false, err
 		}
 		pNode.record = proof.Right - 1
-		if pNode.record == pNode.Count {
+		if pNode.record == pNode.Rear {
 			return true, nil
 		}
 		return false, nil
@@ -418,7 +418,7 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
 	lens := len(proof.Roots)
-	if int64(lens) > pNode.Count {
+	if int64(lens) > pNode.Rear-pNode.Front+1 {
 		err := errors.New("file number out of range")
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
@@ -426,7 +426,7 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 	for i := 0; i < lens; i++ {
 		label := make([]byte, len(ID)+8+expanders.HashSize)
 		util.CopyData(label, ID,
-			expanders.GetBytes(pNode.Count-int64(lens-i-1)), proof.Roots[i])
+			expanders.GetBytes(pNode.Front+int64(i)), proof.Roots[i])
 		labels[i] = expanders.GetHash(label)
 	}
 	if !acc.VerifyDeleteUpdate(pNode.Key, proof.WitChain,
