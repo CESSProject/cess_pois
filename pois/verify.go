@@ -142,7 +142,7 @@ func (v *Verifier) CommitChallenges(ID []byte, left, right int) ([][]int64, erro
 		err := errors.New("prover node not found")
 		return nil, errors.Wrap(err, "generate commit challenges error")
 	}
-	if right-left <= 0 || right > pNode.BufSize || left < int(pNode.Front) {
+	if right-left <= 0 || right > pNode.BufSize || left < 0 {
 		err := errors.New("bad file number")
 		return nil, errors.Wrap(err, "generate commit challenges error")
 	}
@@ -345,9 +345,6 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 		pNode.CommitsBuf[index+len(chals):]...)
 	pNode.BufSize -= len(chals)
 	pNode.Rear += int64(len(chals))
-	if pNode.Front == 0 {
-		pNode.Front = 1
-	}
 	return nil
 }
 
@@ -418,7 +415,7 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
 	lens := len(proof.Roots)
-	if int64(lens) > pNode.Rear-pNode.Front+1 {
+	if int64(lens) > pNode.Rear-pNode.Front {
 		err := errors.New("file number out of range")
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
@@ -426,7 +423,7 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 	for i := 0; i < lens; i++ {
 		label := make([]byte, len(ID)+8+expanders.HashSize)
 		util.CopyData(label, ID,
-			expanders.GetBytes(pNode.Front+int64(i)), proof.Roots[i])
+			expanders.GetBytes(pNode.Front+int64(i)+1), proof.Roots[i])
 		labels[i] = expanders.GetHash(label)
 	}
 	if !acc.VerifyDeleteUpdate(pNode.Key, proof.WitChain,
@@ -434,5 +431,6 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 		err := errors.New("verify acc proof error")
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
+	pNode.Front += int64(lens)
 	return nil
 }

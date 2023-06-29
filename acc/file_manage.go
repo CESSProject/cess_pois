@@ -30,6 +30,15 @@ func saveAccData(dir string, index int, elems, wits [][]byte) error {
 
 func readAccData(dir string, index int) (*AccData, error) {
 	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
+	return readData(fpath)
+}
+
+func readBackup(dir string, index int) (*AccData, error) {
+	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
+	return readData(fpath)
+}
+
+func readData(fpath string) (*AccData, error) {
 	data, err := util.ReadFile(fpath)
 	if err != nil {
 		return nil, errors.Wrap(err, "read element data error")
@@ -58,6 +67,12 @@ func deleteAccData(dir string, last int) error {
 	return nil
 }
 
+func cleanBackup(dir string, index int) error {
+	backup := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
+	err := util.DeleteFile(backup)
+	return errors.Wrap(err, "clean backup error")
+}
+
 func backupAccData(dir string, index int) error {
 	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
 	backup := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
@@ -73,4 +88,12 @@ func backupAccData(dir string, index int) error {
 	defer sf.Close()
 	_, err = io.Copy(bf, sf)
 	return errors.Wrap(err, "backup element data error")
+}
+
+func recoveryAccData(dir string, index int) error {
+	backup := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
+	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
+
+	err := os.Rename(backup, fpath)
+	return errors.Wrap(err, "recovery element data error")
 }

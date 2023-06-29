@@ -2,12 +2,9 @@ package acc
 
 import (
 	"bytes"
-	"cess_pois/util"
-	"fmt"
 	"math"
 	"math/big"
 	"os"
-	"path"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,12 +73,15 @@ type MutiLevelAcc struct {
 	FilePath  string
 }
 
-func Recovery(path string, key RsaKey, front, rear int64) AccHandle {
+func Recovery(path string, key RsaKey, front, rear int64) (AccHandle, error) {
 	if path == "" {
 		path = DEFAULT_PATH
 	}
 	if _, err := os.Stat(path); err != nil {
-		return nil
+		err := os.MkdirAll(path, DEFAULT_DIR_PERM)
+		if err != nil {
+			return nil, errors.Wrap(err, "recovery muti-acc error")
+		}
 	}
 	acc := &AccNode{
 		Value: key.G.Bytes(),
@@ -92,10 +92,12 @@ func Recovery(path string, key RsaKey, front, rear int64) AccHandle {
 		rw:       new(sync.RWMutex),
 		FilePath: path,
 		stable:   true,
-		Deleted:  int(front - 1),
+		Deleted:  int(front),
 	}
-
-	return nil
+	if err := _AccManager.constructMutiAcc(rear); err != nil {
+		return nil, errors.Wrap(err, "recovery muti-acc error")
+	}
+	return _AccManager, nil
 }
 
 func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
@@ -144,8 +146,7 @@ func (acc *MutiLevelAcc) UpdateSnapshot() bool {
 	acc.stable = true
 	//delete buckup file
 	index := acc.Deleted / DEFAULT_ELEMS_NUM
-	backup := path.Join(acc.FilePath, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
-	util.DeleteFile(backup)
+	cleanBackup(acc.FilePath, index)
 	return true
 }
 
@@ -269,6 +270,7 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 
 // addSubAccs inserts the sub acc built with new elements into the multilevel accumulator
 func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
+	//acc.CurrCount will be equal to zero when the accumulator is empty
 	if acc.CurrCount == 0 {
 		acc.Curr = subAcc
 		acc.CurrCount = acc.Curr.Len
@@ -287,6 +289,7 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 		acc.ElemNums += acc.CurrCount
 		return
 	}
+	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
 	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
 		acc.ElemNums += subAcc.Len - acc.CurrCount
 		lens := len(acc.Parent.Children)
@@ -410,9 +413,10 @@ func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error
 }
 
 func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
-	if index <= 0 || index > int64(acc.ElemNums) {
+	if index <= int64(acc.Deleted) || index > int64(acc.Deleted+acc.ElemNums) {
 		return nil, errors.New("bad index")
 	}
+	index -= int64(acc.Deleted)
 	p := acc.Accs
 	var wit *WitnessNode
 	i := 0
@@ -618,18 +622,30 @@ func VerifyDeleteUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, ac
 }
 
 func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
-
-	for i := 0; i < (int(rear)-acc.Deleted)/DEFAULT_ELEMS_NUM; i++ {
+	//acc is empty
+	if rear == int64(acc.Deleted) {
+		return nil
+	}
+	for i := 0; i <= (int(rear)-acc.Deleted)/DEFAULT_ELEMS_NUM; i++ {
 		index := acc.Deleted/DEFAULT_ELEMS_NUM + i
-		data, err := readAccData(acc.FilePath, index)
-		if err != nil {
-			return err
+		backup, err := readBackup(acc.FilePath, index)
+		if err != nil ||
+			len(backup.Values)+acc.Deleted%DEFAULT_ELEMS_NUM != DEFAULT_ELEMS_NUM {
+			backup, err = readAccData(acc.FilePath, index)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = recoveryAccData(acc.FilePath, index)
+			if err != nil {
+				return err
+			}
 		}
 		node := &AccNode{}
-		node.Len = len(data.Values)
+		node.Len = len(backup.Values)
 		node.Value = generateAcc(
-			acc.Key, data.Wits[node.Len-1],
-			[][]byte{data.Values[node.Len-1]},
+			acc.Key, backup.Wits[node.Len-1],
+			[][]byte{backup.Values[node.Len-1]},
 		)
 		acc.addSubAcc(node)
 	}

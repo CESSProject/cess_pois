@@ -11,7 +11,11 @@ func TestPois(t *testing.T) {
 	//Initialize the execution environment
 	k, n, d := int64(7), int64(1024*1024*4), int64(64)
 	key := acc.RsaKeygen(2048)
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), key, 8192)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 8192*2)
+	if err != nil {
+		t.Fatal("new prover error", err)
+	}
+	err = prover.Recovery(key, 0, 0)
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
@@ -26,7 +30,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("generate file error")
 	}
 	//wait 8 minutes for file generate
-	time.Sleep(time.Minute * 12)
+	//time.Sleep(time.Minute * 12)
 	ts := time.Now()
 
 	//get commits
@@ -37,7 +41,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, key.G.Bytes(), 0, 0)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()

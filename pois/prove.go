@@ -6,7 +6,10 @@ import (
 	"cess_pois/tree"
 	"cess_pois/util"
 	"fmt"
+	"io/ioutil"
 	"path"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -89,30 +92,66 @@ type DeletionProof struct {
 	AccPath  [][]byte         `json:"acc_path"`
 }
 
-func NewProver(k, n, d int64, ID []byte, key acc.RsaKey, space int64) (*Prover, error) {
-
-	if k <= 0 || n <= 0 || d <= 0 || space <= 0 || len(ID) == 0 ||
-		key.G.BitLen() == 0 || key.N.BitLen() == 0 {
-		err := errors.New("bad init params")
-		return nil, errors.Wrap(err, "init prover error")
+func NewProver(k, n, d int64, ID []byte, space int64) (*Prover, error) {
+	if k <= 0 || n <= 0 || d <= 0 || space <= 0 || len(ID) == 0 {
+		return nil, errors.New("bad params")
 	}
 	prover := &Prover{
 		ID: ID,
 	}
-	FileSize = FileSize * n / (1024 * 1024)
+	FileSize = int64(expanders.HashSize) * n / (1024 * 1024)
 	prover.Expanders = expanders.ConstructStackedExpanders(k, n, d)
+	prover.space = space
+	return prover, nil
+}
+
+func (p *Prover) Init(key acc.RsaKey) error {
+	if key.G.BitLen() == 0 || key.N.BitLen() == 0 {
+		return errors.New("bad init params")
+	}
 	var err error
-	prover.AccManager, err = acc.NewMutiLevelAcc(AccPath, key)
-	prover.chainState = &ChainState{
-		Acc:   prover.AccManager.GetSnapshot(),
+	p.AccManager, err = acc.NewMutiLevelAcc(AccPath, key)
+	if err != nil {
+		return errors.Wrap(err, "init prover error")
+	}
+	p.chainState = &ChainState{
+		Acc:   p.AccManager.GetSnapshot(),
 		Rear:  0,
 		Front: 0,
 	}
-	prover.space = space
-	return prover, errors.Wrap(err, "init prover error")
+	return nil
 }
 
-func Recovery() *Prover {
+func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
+	if key.G.BitLen() == 0 || key.N.BitLen() == 0 ||
+		front < 0 || rear < 0 || front > rear {
+		return errors.New("bad recovery params")
+	}
+	var err error
+	//recovery acc
+	p.AccManager, err = acc.Recovery(AccPath, key, front, rear)
+	if err != nil {
+		return errors.Wrap(err, "recovery prover error")
+	}
+	//recovery chain state
+	p.chainState = &ChainState{
+		Acc:   p.AccManager.GetSnapshot(),
+		Rear:  rear,
+		Front: front,
+	}
+	//recovery front and rear
+	p.front = front
+	p.rear = rear
+	//recovery context
+	total := FileSize*(p.Expanders.K+1)*1024*1024 +
+		int64(expanders.HashSize)*(p.Expanders.K+2)
+	generated, err := calcGeneratedFile(IdleFilePath, rear, total)
+	if err != nil {
+		return errors.Wrap(err, "init prover error")
+	}
+	p.generated = rear + generated
+	p.added = rear + generated
+	p.commited = rear
 	return nil
 }
 
@@ -173,7 +212,7 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			err = errors.New("no delete task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		if p.proofed > 0 && p.proofed < p.front+num-1 {
+		if p.proofed > 0 && p.proofed < p.front+num {
 			err = errors.New("proving space proofs is not complete")
 			return errors.Wrap(err, "updat prover status error")
 		}
@@ -192,9 +231,6 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			return errors.Wrap(err, "updat prover status error")
 		}
 		p.rear += num
-		if p.front == 0 {
-			p.front = 1
-		}
 	}
 	p.AccManager.UpdateSnapshot()
 	return nil
@@ -493,7 +529,7 @@ func (p *Prover) generateCommitProof(fdir string, count, c int64) (CommitProof, 
 func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof, error) {
 	var err error
 	if len(challenges) <= 0 || right-left <= 0 ||
-		left < p.chainState.Front || right > p.chainState.Rear+1 {
+		left <= p.chainState.Front || right > p.chainState.Rear+1 {
 		err := errors.New("bad challenge range")
 		return nil, errors.Wrap(err, "prove space error")
 	}
@@ -584,7 +620,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 	go func() {
 		p.delete.Store(true)
 		p.rw.Lock()
-		if p.rear-p.front+1 < num {
+		if p.rear-p.front < num {
 			p.rw.Unlock()
 			ch <- nil
 			err := errors.New("insufficient operating space")
@@ -595,13 +631,13 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 		data := p.Expanders.FilePool.Get().(*[]byte)
 		defer p.Expanders.FilePool.Put(data)
 		roots := make([][]byte, num)
-		for i := int64(0); i < num; i++ {
+		for i := int64(1); i <= num; i++ {
 			if err := p.ReadFileLabels(p.front+i, *data); err != nil {
 				Err <- errors.Wrap(err, "prove deletion error")
 				return
 			}
 			mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-			roots[i] = mht.GetRoot(expanders.HashSize)
+			roots[i-1] = mht.GetRoot(expanders.HashSize)
 			tree.RecoveryMht(mht)
 		}
 		wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
@@ -639,7 +675,7 @@ func (p *Prover) organizeFiles(num int64) error {
 }
 
 func (p *Prover) deleteFiles(num int64, raw bool) error {
-	for i := int64(0); i < num; i++ {
+	for i := int64(1); i <= num; i++ {
 		dir := path.Join(IdleFilePath,
 			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, p.front+i))
 		if err := util.DeleteDir(dir); err != nil {
@@ -652,4 +688,39 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 		p.space += num * FileSize * (p.Expanders.K + 1)
 	}
 	return nil
+}
+
+func calcGeneratedFile(dir string, rear, total int64) (int64, error) {
+	count := int64(0)
+	entries, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return count, err
+	}
+	for _, entry := range entries {
+		sidxs := strings.Split(entry.Name(), "-")
+		if len(sidxs) < 2 {
+			continue
+		}
+		if idx, err := strconv.ParseInt(sidxs[1], 10, 64); err != nil || idx <= rear {
+			continue
+		}
+		if !entry.IsDir() {
+			continue
+		}
+		files, err := ioutil.ReadDir(path.Join(dir, entry.Name()))
+		if err != nil {
+			return count, err
+		}
+		size := int64(0)
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			size += file.Size()
+		}
+		if size == total {
+			count++
+		}
+	}
+	return count, nil
 }

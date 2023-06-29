@@ -45,8 +45,8 @@ ok:=verifier.IsLogout(minerID)
 if ok{ 
     // key is cess_pos_demo.acc.RsaKey,be created by tee worker first.
     //minerID is storage miner's accountId,it is a byte slice
-    //acc and count are storage miner's info from chain
-    verifier.RegisterProverNode(minerID,key,acc,count)
+    //acc , front and rear are storage miner's info from chain
+    verifier.RegisterProverNode(minerID,key,acc,front,rear)
 }
 
 ```
@@ -151,8 +151,8 @@ if err!=nil{
 Note that the algorithm requires that all idle files of storage miners be challenged to avoid proving that the data is too large, we can use batch proof
 ```go
 //We use a closure to save the pNode, so there is no need to access the storage miner's information from the chain every time
-func (v Verifier) SpaceVerificationHandle(ID []byte, acc []byte, Count int64) func(chals []int64, proof *SpaceProof) (bool, error) {
-	pNode := NewProverNode(ID, acc, Count)
+func (v Verifier) SpaceVerificationHandle(ID []byte, acc []byte, front,rear int64) func(chals []int64, proof *SpaceProof) (bool, error) {
+	pNode := NewProverNode(ID, acc, front,rear)
 	return func(chals []int64, proof *SpaceProof) (bool, error) {
 		err := v.VerifySpace(pNode, chals, proof)
 		if err != nil {
@@ -166,7 +166,7 @@ func (v Verifier) SpaceVerificationHandle(ID []byte, acc []byte, Count int64) fu
 	}
 }
 //Therefore, the following method can be used in batch space proof
-spaceVerification:=v.SpaceVerificationHandle(minerID,acc,count) //call only once for every storage miners
+spaceVerification:=v.SpaceVerificationHandle(minerID,acc,front,rear) //call only once for every storage miners
 
 ok,err:=spaceVerification(spaceChals,spaceProof)
 if err!=nil{
@@ -178,59 +178,14 @@ if ok{
     //you need to sig result and send to storage miner
 }
 ```
+*Note:*
+In addition to verifying the space challenge proof of each batch, you also need to calculate the hash value of proof data, and use all hash values as elements to calculate MHT, and compare whether the MHT root is consistent with the statement of the storage miner on the chain.
 
 ### POIS step 7:Verify Deletion Proof
 
-If the storage miner does not have enough space to store user files, it needs to delete some idle files, 
+Need to replace idle files with enough space every time user files are stored, even if there is enough unused space,in this way, the user can perceive the change of space,
 and the verifier needs to verify that the new accumulator is obtained by deleting the specified file from the previous accumulator.
 ```go
-//chProof, Err := prover.ProveDeletion(number)
-//chProof and Err are go channel,because deletion is a delayed operation that first sends a delete signal and then waits for other
-//file-altering operations (such as generating or attesting files) to complete before starting the delete.
-//Note that when testing the deletion proof, the code block that judges the remaining logical space needs to be commented out, 
-//because if there is enough unproven space, the deletion proof is not required.
-/*
-code:
-------------------------------------------------------
-//If the unauthenticated space is large enough, there is no need to delete idle files
-    if size := FileSize * num; size < p.space {
-        p.space -= size
-        ch <- nil
-        Err <- nil
-        return
-    }
-    num -= p.space / FileSize
-    p.space = 0
-    //If the uncommitted space is large enough, delete num uncommitted idle files
-    fnum := (p.generated - p.commited)
-    if fnum*(p.Expanders.K+1) >= num {
-        err := p.deleteFiles((num+p.Expanders.K)/(p.Expanders.K+1), true)
-        if err != nil {
-            Err <- errors.Wrap(err, "prove deletion error")
-        }
-        p.space -= num * FileSize
-        ch <- nil
-        return
-    } else if fnum > 0 {
-        num -= fnum * (p.Expanders.K + 1)
-        err := p.deleteFiles(fnum, true)
-        if err != nil {
-            ch <- nil
-            Err <- errors.Wrap(err, "prove deletion error")
-            return
-        }
-        p.space -= fnum * (p.Expanders.K + 1) * FileSize
-    }
-------------------------------------------------------
-space module:
-------------------------------------------------------
-|physical space                                      |
-| ----------------------------------------------------
-|logical space(defined by pois.AvailableSpace)       |
-|-----------------------------------------------------
-|user files   |idle files  |unproven or unused space |
-------------------------------------------------------
-*/
 
 //delProof read from chProof,
 err = verifier.VerifyDeletion(minerID, delProof)
@@ -249,7 +204,7 @@ There are three reasons:
 When a storage miner request for logout, the verifier needs to perform the following operations:
 1. Call the exit method to get the current acc and count of the storage miner
 ```go
-acc,count:=verifier.LogoutProverNode(minerID)
+acc,front,rear:=verifier.LogoutProverNode(minerID)
 ```
 2. Sign acc and count and return to storage miner;The specific details of the signature need to be negotiated with storage miners and chain nodes in the future.
 
@@ -261,12 +216,24 @@ The prover is responsible for generating idle space and submitting proofs to the
 
 ### Init Prover
 
-A storage node needs to uniquely hold a certifier object in any life cycle.
+A storage node needs to uniquely hold a certifier object in any life cycle.When using Proof of Space for the first time, the prover object needs to be initialized. Under normal circumstances, the storage node will not stop the service, but when there is an unexpected situation such as downtime, you can create a new certifier object and restore it.
 
 ```go
 // k,n,d and key are params that needs to be negotiated with the verifier in advance.
 // minerID is storage node's account ID, and space is the amount of physical space available(MiB)
-prover, err := pois.NewProver(k, n, d, minerID, key, space)
+prover, err := pois.NewProver(k, n, d, minerID,space)
+if err != nil {
+    //error handling code...
+}
+
+//Please initialize prover for the first time
+err=prover.Init(key)
+if err != nil {
+    //error handling code...
+}
+
+//If it is downtime recovery, call the recovery method.front and rear are read from minner info on chain
+err=prover.Recovery(key,front,rear)
 if err != nil {
     //error handling code...
 }
@@ -290,7 +257,8 @@ ok := prover.GenerateFile(num)
 
 ``` go
 // GetCommits method read file commits from dir storaged idle files. You need to submit commits to verifier.
-commits, err := prover.GetCommits(16)
+// num is the number you want to commit, it is must less than or equal to number of idle files that have been generated but not committed yet.
+commits, err := prover.GetCommits(num)
 if err != nil {
     //error handling code...
 }
@@ -327,18 +295,15 @@ ok:=prover.AccRollback(false)
 ```
 
 *Note that this step is important!*
-The storage node needs to submit the accumulator acc and the idle file counter count to the blockchain. In order to save transaction costs, batch submission is supported.
+The storage node needs to submit the accumulator (acc) and the idle file counter (front and rear) to the blockchain. In order to save transaction costs, batch submission is supported.
 Frequent submission will increase the consumption of transaction fees, but it can make the chain nodes perceive the change of idle space faster and get more rewards. Therefore, it is up to the storage miner to decide when to commit the update.
 
-If you are in the space challenge at this time, please complete the following steps before sending the space proof for the first time,or after the space proof is completed.
+It is supported to generate and delete idle files at the same time, but it needs to be serialized when updating the accumulator, so please update the status (use `prover.UpdateStatus(...)`) in time after completing the commitment challenge verification to prevent the deletion proof from being blocked.
 
 When updating the state to the blockchain, the following operations are required:
 ```go
 //1.send logout request to verifier,and receive response(data signature)
-//2.Send the new state (acc and Count), and their signature to the blockchain.
-acc,count:=prover.GetNewChainStates() //Please be sure to use this method after prover.UpdateStatus
-//send transaction...
-
+//2.Send the new state (acc,front and rear), and their signature to the blockchain.
 //3.update the local chain state,when the transaction is sent successfully
 //This keeps it in sync with the blockchain, which would otherwise fail due to inconsistent state at proof of space
 prover.UpdateChainState()
@@ -346,13 +311,13 @@ prover.UpdateChainState()
 
 ### POIS step 4:Prove Space
 
-The storage node needs to accept the space proof challenge of the consensus node from time to time to prove that it has persistently held the commited idle space.
+The storage node needs to prove the space proof challenge of the consensus node from time to time to prove that it has persistently held the commited idle space.
 ```go
-//The space challenge is generated by the verifier (TEE Worker)
-//spaceChals, err := verifier.SpaceChallenges(minerID, fileNum)
+//The space challenge is generated by the chain node(consensus node)
+//spaceChals, err := SpaceChallenges(minerID, fileNum)
 
 // ProveSpace receives a space challenges parameter (which label of every files are included), and returns a challenge proofs, which may be error
-// you can use left and right to complete proof of space challenges in batches,left>0,starting from 1,and right<=Count+1.
+// you can use left and right to complete proof of space challenges in batches,left>front,starting from front+1,and right<=rear+1.
 // Please note that after each commit, in the new proof of space, left must be the right of the previous commit,such as (1,3),(3,5),(5,10)...
 spaceProof, err := prover.ProveSpace(spaceChals,left,right)
 if err != nil {
@@ -360,13 +325,16 @@ if err != nil {
 }
 //send spaceProof to verifier and wait for the response, but the space challenge didn't change any state, so no update is required based on the response
 ```
+*Note:*
+Whenever you complete a batch of space proof challenge, you need to calculate the hash value of the proof data, calculate the MHT with the hash values of all proof batches as elements, and submit the root hash value to the blockchain as proof of completion.
+
 When the space proofs of all idle files are verified, the verifier will return the signature of the verification result, and you needs to submit the result and signature to the blockchain.Please submit in time to avoid overtime penalty.
 
 ### POIS step 5:Prove Deletion
 
-When storing new user files, file deletion proof is required. It will firstly judge whether there is enough unused space or uncommitted idle space. When these spaces are not enough to accommodate user files, the commited idle space will be deleted,and the deletion proof will be given.
+When storing new user files, file deletion proof is required. The latest proof of space adopts queue model, deleting elements from the front and inserting elements from the rear, so the insertion and deletion of idle files do not conflict, they can be performed concurrently, but the priority of deletion is higher than that of insertion.
 ```go
-//ProveDeletion passes in number of file blocks (the file block size is defined in pois.FileSize, generally 64MiB),
+//ProveDeletion passes in number of file blocks (the file block size is defined in pois.FileSize, generally 256MiB),
 //so you first need to calculate how many file blocks the user file occupies, and call this method with this value as a parameter.
 //The method returns a deletion proof channel and an error channel, because the deletion process has a lot of work and is asynchronous, you need to monitor the deletion result.
 chProof, Err := prover.ProveDeletion(num)
@@ -380,16 +348,19 @@ case err = <-Err:
 case delProof := <-chProof:
     break
 }
-//If no error occurs, you still need to judge whether the deletion proof is empty. If it is empty, it means that there is still space left, 
-//and there is no need to prove deletion proof, so you don't need to send proofs to verifiers
 
 //If the deletion proof is not empty, it needs to be sent to the verifier
 // send delProof to verifier
 
+//if failed to verify delProof, you need to roll back status
+prover.AccRollback(true) //If the parameter is set to true, it means the rollback of the deletion operation.
+
 //When user files are deleted, the corresponding space needs to be reclaimed
 prover.AddSpace(size) //size MiB
 ```
-Please note that the verifier will return the signature of the new state after verifying the proof is successful, you need to submit the new state to the blockchain every time the deletion proof is successfully verified.When the transaction is sent successfully, you also need to call the `prover.UpdateChainState()` method in time to update the local state.The precautions here are the same as before
+Please note that the verifier will return the signature of the new state after verifying the proof is successful, you need to submit the new state to the blockchain every time the deletion proof is successfully verified.When the transaction is sent successfully, you also need to call the `prover.UpdateChainState(num,true)` and `` method in time to update the local state.The precautions here are the same as before.
 
 
-Please note that the space discussed here is a logical space, please provide a reasonable logical idle space for the storage node when using the space proof to prevent unnecessary errors.And when the user's file is less than 64M (assuming that the file block size stipulated by the space proof is 64M), the minimum space needs to be 64M.
+Please note that the space discussed here is a logical space, please provide a reasonable logical idle space for the storage node when using the space proof to prevent unnecessary errors.And when the user's file is less than 256M (assuming that the file block size stipulated by the space proof is 256M), the minimum space needs to be 256M.
+
+Finally, due to the need to store accumulators, cache intermediate results of proof of space, and cache user files, you need to reserve enough external space instead of declaring all physical space as logical space for proof of space.
