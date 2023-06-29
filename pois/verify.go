@@ -68,10 +68,11 @@ func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) *Pr
 	return &ProverNode{
 		ID: ID,
 		Record: &Record{
-			Acc:   acc,
-			Front: front,
-			Rear:  rear,
-			Key:   key,
+			Acc:    acc,
+			Front:  front,
+			Rear:   rear,
+			Key:    key,
+			record: front,
 		},
 	}
 }

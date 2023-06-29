@@ -68,7 +68,7 @@ type MutiLevelAcc struct {
 	rw        *sync.RWMutex
 	isUpdate  bool
 	stable    bool
-	isDel     atomic.Bool
+	isDel     *atomic.Bool
 	snapshot  *MutiLevelAcc
 	FilePath  string
 }
@@ -92,6 +92,7 @@ func Recovery(path string, key RsaKey, front, rear int64) (AccHandle, error) {
 		rw:       new(sync.RWMutex),
 		FilePath: path,
 		stable:   true,
+		isDel:    new(atomic.Bool),
 		Deleted:  int(front),
 	}
 	if err := _AccManager.constructMutiAcc(rear); err != nil {
@@ -117,6 +118,7 @@ func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
 		Accs:     acc,
 		Key:      key,
 		rw:       new(sync.RWMutex),
+		isDel:    new(atomic.Bool),
 		FilePath: path,
 		stable:   true,
 	}
@@ -178,6 +180,9 @@ func (acc *MutiLevelAcc) copy(other *MutiLevelAcc) {
 		acc.Curr = acc.Parent.Children[acc.Parent.Len-1]
 	}
 	acc.rw = other.rw
+	acc.stable = other.stable
+	acc.Deleted = other.Deleted
+	acc.isDel = other.isDel
 	acc.FilePath = other.FilePath
 }
 

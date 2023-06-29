@@ -15,7 +15,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 0)
+	err = prover.Recovery(key, 4, 4)
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
@@ -41,7 +41,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 4, 4)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -103,7 +103,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1, 5)
+	spaceProof, err := prover.ProveSpace(spaceChals, 5, 9)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
