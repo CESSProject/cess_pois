@@ -1,8 +1,12 @@
 package test
 
 import (
+	"bytes"
 	"cess_pois/acc"
 	"cess_pois/pois"
+	"cess_pois/util"
+	"encoding/binary"
+	"math/big"
 	"testing"
 	"time"
 )
@@ -10,12 +14,15 @@ import (
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
 	k, n, d := int64(7), int64(1024*1024*4), int64(64)
-	key := acc.RsaKeygen(2048)
+	key, err := ParseKey("./key")
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 8192*2)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 4, 4)
+	err = prover.Recovery(key, 0, 0)
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
@@ -41,7 +48,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 4, 4)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -103,7 +110,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 5, 9)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 5)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -150,4 +157,47 @@ func TestPois(t *testing.T) {
 		t.Fatal("update count error", err)
 	}
 	t.Log("update prover status time", time.Since(ts))
+}
+
+func ToBytes(key acc.RsaKey) []byte {
+
+	n, g := key.N.Bytes(), key.G.Bytes()
+	nl, gl := int64(len(n)), int64(len(g))
+	buf := bytes.NewBuffer([]byte{})
+	binary.Write(buf, binary.BigEndian, nl)
+	binary.Write(buf, binary.BigEndian, gl)
+	data := make([]byte, buf.Len()+int(nl+gl))
+	copy(data[:16], buf.Bytes())
+	copy(data[16:16+nl], n)
+	copy(data[16+nl:], g)
+	return data
+}
+
+func GetKeyFromBytes(data []byte) acc.RsaKey {
+	if len(data) < 8 {
+		return acc.RsaKeygen(2048)
+	}
+	nl := binary.BigEndian.Uint64(data[:8])
+	gl := binary.BigEndian.Uint64(data[8:16])
+	if nl <= 0 || gl <= 0 || len(data)-16 != int(nl+gl) {
+		return acc.RsaKeygen(2048)
+	}
+	key := acc.RsaKey{
+		N: *(big.NewInt(0).SetBytes(data[16 : 16+nl])),
+		G: *(big.NewInt(0).SetBytes(data[16+nl:])),
+	}
+	return key
+}
+
+func SaveKey(path string, key acc.RsaKey) error {
+	bytes := ToBytes(key)
+	return util.SaveFile(path, bytes)
+}
+
+func ParseKey(path string) (acc.RsaKey, error) {
+	bytes, err := util.ReadFile(path)
+	if err != nil {
+		return acc.RsaKeygen(2048), err
+	}
+	return GetKeyFromBytes(bytes), nil
 }

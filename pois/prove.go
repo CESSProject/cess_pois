@@ -147,11 +147,13 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
 		int64(expanders.HashSize)*(p.Expanders.K+2)
 	generated, err := calcGeneratedFile(IdleFilePath, rear, total)
 	if err != nil {
-		return errors.Wrap(err, "init prover error")
+		return errors.Wrap(err, "recovery prover error")
 	}
 	p.generated = rear + generated
 	p.added = rear + generated
 	p.commited = rear
+	p.space -= (p.rear - p.front) * FileSize                //calc proved space
+	p.space -= generated * (FileSize * (p.Expanders.K + 1)) //calc generated space
 	return nil
 }
 

@@ -44,7 +44,7 @@ func TestGetBytes(t *testing.T) {
 	for i := 0; i < 4096; i++ {
 		b := expanders.GetBytes(expanders.NodeType(i))
 		if len(b) != 4 {
-			t.Log("error length", len(b))
+			t.Log("error length", len(b), b)
 			break
 		}
 	}
