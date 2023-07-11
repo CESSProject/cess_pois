@@ -17,3 +17,9 @@ func TestACC(t *testing.T) {
 	acc.GenerateWitness(key.G, key.N, data)
 	t.Log("test acc success", time.Since(ts))
 }
+
+func TestAppend(t *testing.T) {
+	a := make([]int, 0, 10)
+	b := append(a, 10)
+	t.Log(a, b)
+}

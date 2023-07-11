@@ -455,105 +455,6 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	return wit, nil
 }
 
-// Accumulator validation interface
-
-func VerifyAcc(key RsaKey, acc, u, wit []byte) bool {
-	e := Hprime(*new(big.Int).SetBytes(u))
-	dash := new(big.Int).Exp(
-		big.NewInt(0).SetBytes(wit),
-		&e, &key.N,
-	)
-	return dash.Cmp(new(big.Int).SetBytes(acc)) == 0
-}
-
-// VerifyMutilevelAcc uses witness chains to realize the existence proof of elements in multi-level accumulators;
-// The witness chain is the witness list from the bottom accumulator to the top accumulator (root accumulator)
-func VerifyMutilevelAcc(key RsaKey, wits *WitnessNode, acc []byte) bool {
-	for wits != nil && wits.Acc != nil {
-		if !VerifyAcc(key, wits.Acc.Elem, wits.Elem, wits.Wit) {
-			return false
-		}
-		wits = wits.Acc
-	}
-	if wits == nil {
-		return false
-	}
-	return bytes.Equal(wits.Elem, acc)
-}
-
-// AddElementsAndProof add elements to muti-level acc and create proof of added elements
-func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]byte, error) {
-	snapshot := acc.GetSnapshot()
-	exist := &WitnessNode{Elem: snapshot.Accs.Value}
-	err := acc.AddElements(elems)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "proof acc insert error")
-	}
-	//the proof of adding elements consists of two parts,
-	//the first part is the witness chain of the bottom accumulator where the element is located,
-	//witness chain node is a special structure(Elem(acc value) is G,Wit is parent node's Elem)
-	//when inserting an element needs to trigger the generation of a new accumulator,
-	//the second part is an accumulator list, which contains the accumulator value
-	//recalculated from the bottom to the top after inserting elements
-	count := 1
-	for p, q := acc.Accs, snapshot.Accs; p != nil && q != nil && count < DEFAULT_LEVEL; {
-		if p.Len > q.Len {
-			for i := count; i < DEFAULT_LEVEL; i++ {
-				exist = &WitnessNode{Acc: exist}
-				exist.Elem, exist.Wit = acc.Key.G.Bytes(), exist.Acc.Elem
-			}
-			break
-		}
-		count++
-		p, q = p.Children[p.Len-1], q.Children[q.Len-1]
-		exist = &WitnessNode{Acc: exist}
-		exist.Elem, exist.Wit = q.Value, q.Wit
-	}
-	p := acc.Accs
-	accs := make([][]byte, DEFAULT_LEVEL)
-	for i := 0; i < DEFAULT_LEVEL; i++ {
-		accs[DEFAULT_LEVEL-i-1] = p.Value
-		if p.Children != nil {
-			p = p.Children[p.Len-1]
-		}
-	}
-	return exist, accs, nil
-}
-
-func VerifyInsertUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {
-	if exist == nil || len(elems) == 0 || len(accs) < DEFAULT_LEVEL {
-		return false
-	}
-	p := exist
-	//if the condition is true, a new accumulator is inserted
-	for p.Acc != nil && bytes.Equal(p.Acc.Elem, p.Wit) {
-		p = p.Acc
-	}
-	//proof of the witness of accumulator elements,
-	//when the element's accumulator does not exist, recursively verify its parent accumulator
-	if !VerifyMutilevelAcc(key, p, acc) {
-		return false
-	}
-
-	//verify that the newly generated accumulators after inserting elements
-	//is calculated on the original accumulators
-	subAcc := generateAcc(key, exist.Elem, elems)
-	if !bytes.Equal(subAcc, accs[0]) {
-		return false
-	}
-	p = exist
-	count := 1
-	for p != nil && p.Acc != nil {
-		subAcc = generateAcc(key, p.Wit, [][]byte{accs[count-1]})
-		if !bytes.Equal(subAcc, accs[count]) {
-			return false
-		}
-		p = p.Acc
-		count++
-	}
-	return true
-}
-
 // DeleteElementsAndProof delete elements from muti-level acc and create proof of deleted elements
 func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte, error) {
 
@@ -596,34 +497,43 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 	return exist, accs, nil
 }
 
-func VerifyDeleteUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {
-	if exist == nil || len(elems) == 0 || len(accs) < DEFAULT_LEVEL {
-		return false
+// AddElementsAndProof add elements to muti-level acc and create proof of added elements
+func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]byte, error) {
+	snapshot := acc.GetSnapshot()
+	exist := &WitnessNode{Elem: snapshot.Accs.Value}
+	err := acc.AddElements(elems)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "proof acc insert error")
 	}
-	//first need to verify whether the deleted elements are in the muti-level accumulator
-	if !VerifyMutilevelAcc(key, exist, acc) {
-		return false
-	}
-	subAcc := generateAcc(key, accs[0], elems)
-	if !bytes.Equal(subAcc, exist.Elem) {
-		return false
-	}
-	//then verify that the new accumulators is deleted on the original accumulators
-	p := exist
+	//the proof of adding elements consists of two parts,
+	//the first part is the witness chain of the bottom accumulator where the element is located,
+	//witness chain node is a special structure(Elem(acc value) is G,Wit is parent node's Elem)
+	//when inserting an element needs to trigger the generation of a new accumulator,
+	//the second part is an accumulator list, which contains the accumulator value
+	//recalculated from the bottom to the top after inserting elements
 	count := 1
-	for p != nil && p.Acc != nil {
-		if !bytes.Equal(accs[count-1], key.G.Bytes()) {
-			subAcc = generateAcc(key, p.Wit, [][]byte{accs[count-1]})
-		} else {
-			subAcc = p.Wit
+	for p, q := acc.Accs, snapshot.Accs; p != nil && q != nil && count < DEFAULT_LEVEL; {
+		if p.Len > q.Len {
+			for i := count; i < DEFAULT_LEVEL; i++ {
+				exist = &WitnessNode{Acc: exist}
+				exist.Elem, exist.Wit = acc.Key.G.Bytes(), exist.Acc.Elem
+			}
+			break
 		}
-		if !bytes.Equal(subAcc, accs[count]) {
-			return false
-		}
-		p = p.Acc
 		count++
+		p, q = p.Children[p.Len-1], q.Children[q.Len-1]
+		exist = &WitnessNode{Acc: exist}
+		exist.Elem, exist.Wit = q.Value, q.Wit
 	}
-	return true
+	p := acc.Accs
+	accs := make([][]byte, DEFAULT_LEVEL)
+	for i := 0; i < DEFAULT_LEVEL; i++ {
+		accs[DEFAULT_LEVEL-i-1] = p.Value
+		if p.Children != nil {
+			p = p.Children[p.Len-1]
+		}
+	}
+	return exist, accs, nil
 }
 
 func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
@@ -655,4 +565,94 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 		acc.addSubAcc(node)
 	}
 	return nil
+}
+
+// Accumulator validation interface
+
+func VerifyAcc(key RsaKey, acc, u, wit []byte) bool {
+	e := Hprime(*new(big.Int).SetBytes(u))
+	dash := new(big.Int).Exp(
+		big.NewInt(0).SetBytes(wit),
+		&e, &key.N,
+	)
+	return dash.Cmp(new(big.Int).SetBytes(acc)) == 0
+}
+
+// VerifyMutilevelAcc uses witness chains to realize the existence proof of elements in multi-level accumulators;
+// The witness chain is the witness list from the bottom accumulator to the top accumulator (root accumulator)
+func VerifyMutilevelAcc(key RsaKey, wits *WitnessNode, acc []byte) bool {
+	for wits != nil && wits.Acc != nil {
+		if !VerifyAcc(key, wits.Acc.Elem, wits.Elem, wits.Wit) {
+			return false
+		}
+		wits = wits.Acc
+	}
+	if wits == nil {
+		return false
+	}
+	return bytes.Equal(wits.Elem, acc)
+}
+
+func VerifyInsertUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {
+	if exist == nil || len(elems) == 0 || len(accs) < DEFAULT_LEVEL {
+		return false
+	}
+	p := exist
+	//if the condition is true, a new accumulator is inserted
+	for p.Acc != nil && bytes.Equal(p.Acc.Elem, p.Wit) {
+		p = p.Acc
+	}
+	//proof of the witness of accumulator elements,
+	//when the element's accumulator does not exist, recursively verify its parent accumulator
+	if !VerifyMutilevelAcc(key, p, acc) {
+		return false
+	}
+
+	//verify that the newly generated accumulators after inserting elements
+	//is calculated on the original accumulators
+	subAcc := generateAcc(key, exist.Elem, elems)
+	if !bytes.Equal(subAcc, accs[0]) {
+		return false
+	}
+	p = exist
+	count := 1
+	for p != nil && p.Acc != nil {
+		subAcc = generateAcc(key, p.Wit, [][]byte{accs[count-1]})
+		if !bytes.Equal(subAcc, accs[count]) {
+			return false
+		}
+		p = p.Acc
+		count++
+	}
+	return true
+}
+
+func VerifyDeleteUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {
+	if exist == nil || len(elems) == 0 || len(accs) < DEFAULT_LEVEL {
+		return false
+	}
+	//first need to verify whether the deleted elements are in the muti-level accumulator
+	if !VerifyMutilevelAcc(key, exist, acc) {
+		return false
+	}
+	subAcc := generateAcc(key, accs[0], elems)
+	if !bytes.Equal(subAcc, exist.Elem) {
+		return false
+	}
+	//then verify that the new accumulators is deleted on the original accumulators
+	p := exist
+	count := 1
+	for p != nil && p.Acc != nil {
+		if !bytes.Equal(accs[count-1], key.G.Bytes()) {
+			subAcc = generateAcc(key, p.Wit, [][]byte{accs[count-1]})
+		} else {
+			subAcc = p.Wit
+		}
+		if !bytes.Equal(subAcc, accs[count]) {
+			return false
+		}
+		p = p.Acc
+		count++
+	}
+	return true
 }

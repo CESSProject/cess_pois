@@ -7,6 +7,7 @@ import (
 	"cess_pois/util"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -19,8 +20,8 @@ import (
 
 var (
 	FileSize       int64  = int64(expanders.HashSize)
-	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	AccPath        string = acc.DEFAULT_PATH
+	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 16
 )
 
@@ -29,14 +30,13 @@ type Prover struct {
 	rear      int64
 	front     int64
 	space     int64
+	setLen    int64
 	context
 	rw         sync.RWMutex
 	delete     atomic.Bool
 	update     atomic.Bool
 	generate   atomic.Bool
 	ID         []byte
-	cmdCh      chan<- int64
-	resCh      <-chan bool
 	chainState *ChainState
 	AccManager acc.AccHandle
 }
@@ -61,9 +61,9 @@ type MhtProof struct {
 	Locs  []byte             `json:"locs"`
 }
 
-type Commit struct {
-	FileIndex int64    `json:"file_index"`
-	Roots     [][]byte `json:"roots"`
+type Commits struct {
+	FileIndexs []int64  `json:"file_indexs"`
+	Roots      [][]byte `json:"roots"`
 }
 
 type CommitProof struct {
@@ -92,7 +92,7 @@ type DeletionProof struct {
 	AccPath  [][]byte         `json:"acc_path"`
 }
 
-func NewProver(k, n, d int64, ID []byte, space int64) (*Prover, error) {
+func NewProver(k, n, d int64, ID []byte, space, setLen int64) (*Prover, error) {
 	if k <= 0 || n <= 0 || d <= 0 || space <= 0 || len(ID) == 0 {
 		return nil, errors.New("bad params")
 	}
@@ -102,6 +102,7 @@ func NewProver(k, n, d int64, ID []byte, space int64) (*Prover, error) {
 	FileSize = int64(expanders.HashSize) * n / (1024 * 1024)
 	prover.Expanders = expanders.ConstructStackedExpanders(k, n, d)
 	prover.space = space
+	prover.setLen = setLen
 	return prover, nil
 }
 
@@ -143,9 +144,8 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
 	p.front = front
 	p.rear = rear
 	//recovery context
-	total := FileSize*(p.Expanders.K+1)*1024*1024 +
-		int64(expanders.HashSize)*(p.Expanders.K+2)
-	generated, err := calcGeneratedFile(IdleFilePath, rear, total)
+
+	generated, err := p.calcGeneratedFile(IdleFilePath)
 	if err != nil {
 		return errors.Wrap(err, "recovery prover error")
 	}
@@ -157,23 +157,26 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
 	return nil
 }
 
-// GenerateFile notifies the idle file generation service to generate the specified number of files,
-// if num>MaxCommitProofThread,it may be blocked
-func (p *Prover) GenerateFile(num int64) bool {
-	if num <= 0 ||
-		p.space < num*FileSize*(p.Expanders.K+1) {
-		return false
+// GenerateIdleFileSet generate num idle files, num must be consistent with the data given by CESS, otherwise it cannot pass the verification
+func (p *Prover) GenerateIdleFileSet() error {
+	if p.space < p.setLen*FileSize*(p.Expanders.K+1) {
+		return errors.New("generate idle file set error: bad element number")
 	}
-
 	if !p.generate.CompareAndSwap(false, true) {
-		return false
+		return errors.New("generate idle file set error: lock is occupied")
 	}
-	for i := p.added + 1; i <= p.added+num; i++ {
-		p.cmdCh <- i
+	p.added += p.setLen
+	p.space -= p.setLen * FileSize * (p.Expanders.K + 1)
+	p.generate.Store(false)
+	if err := p.Expanders.GenerateIdleFileSet(
+		p.ID, p.added-p.setLen+1, p.setLen,
+		IdleFilePath); err != nil {
+		// clean files
+		p.space += p.setLen * FileSize * (p.Expanders.K + 1)
+		return errors.Wrap(err, "generate idle file set error")
 	}
-	p.added += num
-	p.space -= num * FileSize * (p.Expanders.K + 1)
-	return p.generate.CompareAndSwap(true, false)
+	p.generated += p.setLen
+	return nil
 }
 
 // CommitRollback need to be invoked when submit commits to verifier failure
@@ -271,51 +274,37 @@ func (p *Prover) UpdateChainState() {
 	p.chainState.Front = p.front
 }
 
-// RunIdleFileGenerationServer be used to start idle file generation server
-func (p *Prover) RunIdleFileGenerationServer(threadNum int) {
-	tree.InitMhtPool(int(p.Expanders.N), expanders.HashSize)
-	p.cmdCh, p.resCh = expanders.IdleFileGenerationServer(p.Expanders,
-		p.ID, IdleFilePath, threadNum)
-	go func() {
-		for res := range p.resCh {
-			if !res {
-				return
-			}
-			p.generated++
-		}
-	}()
-}
-
-// GetCommits can not run concurrently!
-func (p *Prover) GetCommits(num int64) ([]Commit, error) {
-	var err error
+// GetIdleFileSetCommits can not run concurrently! And num must be consistent with the data given by CESS.
+func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
+	var (
+		err     error
+		commits Commits
+	)
 	if !p.update.CompareAndSwap(false, true) {
-		return nil, nil
+		err = errors.New("lock is occupied")
+		return commits, errors.Wrap(err, "get commits error")
 	}
 	fileNum := p.generated
 	commited := p.commited
-	if fileNum-commited <= 0 {
-		err = errors.New("no idle file generated")
-		return nil, errors.Wrap(err, "get commits error")
+	if fileNum-commited < p.setLen {
+		err = errors.New("bad commit data")
+		return commits, errors.Wrap(err, "get commits error")
 	}
-	if fileNum-commited < num {
-		num = fileNum - commited
+	//read commit file of idle file set
+	name := path.Join(
+		IdleFilePath,
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (commited+p.setLen)/p.setLen),
+		expanders.COMMIT_FILE,
+	)
+	commits.Roots, err = util.ReadProofFile(name, int((p.Expanders.K+1)*p.setLen+1), expanders.HashSize)
+	if err != nil {
+		return commits, errors.Wrap(err, "get commits error")
 	}
-	commits := make([]Commit, num)
-	for i := int64(1); i <= num; i++ {
-		commits[i-1].FileIndex = commited + i
-		name := path.Join(
-			IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, commited+i),
-			expanders.COMMIT_FILE,
-		)
-		commits[i-1].Roots, err = util.ReadProofFile(
-			name, int(p.Expanders.K+2), expanders.HashSize)
-		if err != nil {
-			return nil, errors.Wrap(err, "get commits error")
-		}
+	commits.FileIndexs = make([]int64, p.setLen)
+	for i := int64(0); i < p.setLen; i++ {
+		commits.FileIndexs[i] = commited + i + 1
 	}
-	p.commited += num
+	p.commited += p.setLen
 	return commits, nil
 }
 
@@ -347,14 +336,17 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 		threads = MaxProofThread
 	}
 	proofSet := make([][]CommitProof, lens)
-
+	counts := make([]int64, len(challenges))
+	for i := 0; i < len(challenges); i++ {
+		counts[i] = challenges[i][0]
+	}
 	wg := sync.WaitGroup{}
 	wg.Add(threads)
 	for i := 0; i < threads; i++ {
 		idx := i
 		ants.Submit(func() {
 			defer wg.Done()
-			proofs, e := p.proveCommit(challenges[idx])
+			proofs, e := p.proveCommit(challenges[idx], counts)
 			if e != nil {
 				err = e
 				return
@@ -390,27 +382,28 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 	return proof, nil
 }
 
-func (p *Prover) ReadAndCalcFileLabel(Count int64) ([]byte, error) {
-	name := path.Join(
+func (p *Prover) ReadAndCalcFileLabel(index int64) ([]byte, error) {
+	fname := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, Count),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, index/p.setLen+1),
 		expanders.COMMIT_FILE,
 	)
 	roots, err := util.ReadProofFile(
-		name, int(p.Expanders.K+2), expanders.HashSize)
+		fname, int(p.Expanders.K+1)*int(p.setLen)+1, expanders.HashSize)
 	if err != nil {
 		return nil, errors.Wrap(err, "read file root hashs error")
 	}
-	root := roots[p.Expanders.K]
+	root := roots[(p.Expanders.K*p.setLen)+(index-1)%p.setLen]
 	label := append([]byte{}, p.ID...)
-	label = append(label, expanders.GetBytes(Count)...)
+	label = append(label, expanders.GetBytes(index)...)
 	return expanders.GetHash(append(label, root...)), nil
 }
 
-func (p *Prover) ReadFileLabels(Count int64, buf []byte) error {
+func (p *Prover) ReadFileLabels(index int64, buf []byte) error {
 	name := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, Count),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, index/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, index),
 		fmt.Sprintf("%s-%d", expanders.LAYER_NAME, p.Expanders.K),
 	)
 	if err := util.ReadFileToBuf(name, buf); err != nil {
@@ -419,20 +412,24 @@ func (p *Prover) ReadFileLabels(Count int64, buf []byte) error {
 	return nil
 }
 
-func (p *Prover) proveCommit(challenge []int64) ([]CommitProof, error) {
+func (p *Prover) proveCommit(challenge []int64, counts []int64) ([]CommitProof, error) {
 	var (
 		err   error
 		index expanders.NodeType
 	)
 	proofs := make([]CommitProof, len(challenge)-1)
-	fdir := path.Join(IdleFilePath, fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, challenge[0]))
-	proofs[0], err = p.generateCommitProof(fdir, challenge[0], challenge[1])
+	fdir := path.Join(
+		IdleFilePath,
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, challenge[0]/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, challenge[0]),
+	)
+	proofs[0], err = p.generateCommitProof(fdir, counts, challenge[1])
 	if err != nil {
 		return nil, errors.Wrap(err, "prove one file commit error")
 	}
 	for i := 2; i < len(challenge); i++ {
 		index = proofs[i-2].Parents[challenge[i]].Index
-		proofs[i-1], err = p.generateCommitProof(fdir, challenge[0], int64(index))
+		proofs[i-1], err = p.generateCommitProof(fdir, counts, int64(index))
 		if err != nil {
 			return nil, errors.Wrap(err, "prove one file commit error")
 		}
@@ -440,7 +437,7 @@ func (p *Prover) proveCommit(challenge []int64) ([]CommitProof, error) {
 	return proofs, nil
 }
 
-func (p *Prover) generateCommitProof(fdir string, count, c int64) (CommitProof, error) {
+func (p *Prover) generateCommitProof(fdir string, counts []int64, c int64) (CommitProof, error) {
 	layer := c / p.Expanders.N
 	if layer < 0 || layer > p.Expanders.K {
 		return CommitProof{}, errors.New("generate commit proof error: bad node index")
@@ -477,7 +474,7 @@ func (p *Prover) generateCommitProof(fdir string, count, c int64) (CommitProof, 
 	}
 	node := expanders.NewNode(expanders.NodeType(c))
 	node.Parents = make([]expanders.NodeType, 0, p.Expanders.D+1)
-	expanders.CalcParents(p.Expanders, node, p.ID, count)
+	expanders.CalcParents(p.Expanders, node, p.ID, counts...)
 	fpath = path.Join(fdir, fmt.Sprintf("%s-%d", expanders.LAYER_NAME, layer-1))
 	pdata := p.Expanders.FilePool.Get().(*[]byte)
 	defer p.Expanders.FilePool.Put(pdata)
@@ -592,7 +589,6 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 			}
 		})
 	}
-
 	wg.Wait()
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
@@ -658,11 +654,15 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 }
 
 func (p *Prover) organizeFiles(num int64) error {
+	dir := path.Join(
+		IdleFilePath,
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, p.rear/p.setLen+1),
+	)
 	for i := p.rear + 1; i <= p.rear+num; i++ {
-		dir := path.Join(IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, i))
 		for j := 0; j < int(p.Expanders.K); j++ {
-			name := path.Join(dir, fmt.Sprintf("%s-%d", expanders.LAYER_NAME, j))
+			name := path.Join(dir,
+				fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, i),
+				fmt.Sprintf("%s-%d", expanders.LAYER_NAME, j))
 			if err := util.DeleteFile(name); err != nil {
 				return err
 			}
@@ -678,8 +678,11 @@ func (p *Prover) organizeFiles(num int64) error {
 
 func (p *Prover) deleteFiles(num int64, raw bool) error {
 	for i := int64(1); i <= num; i++ {
-		dir := path.Join(IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, p.front+i))
+		dir := path.Join(
+			IdleFilePath,
+			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (p.front+i)/p.setLen+1),
+			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, p.front+i),
+		)
 		if err := util.DeleteDir(dir); err != nil {
 			return errors.Wrap(err, "delete files error")
 		}
@@ -692,8 +695,11 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 	return nil
 }
 
-func calcGeneratedFile(dir string, rear, total int64) (int64, error) {
+func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
+
 	count := int64(0)
+	fileTotalSize := FileSize * (p.Expanders.K + 1) * 1024 * 1024
+	rootSize := (p.setLen*(p.Expanders.K+1) + 1) * int64(expanders.HashSize)
 	entries, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return count, err
@@ -703,25 +709,41 @@ func calcGeneratedFile(dir string, rear, total int64) (int64, error) {
 		if len(sidxs) < 2 {
 			continue
 		}
-		if idx, err := strconv.ParseInt(sidxs[1], 10, 64); err != nil || idx <= rear {
+		if idx, err := strconv.ParseInt(sidxs[1], 10, 64); err != nil || idx*p.setLen <= p.rear {
 			continue
 		}
 		if !entry.IsDir() {
+			continue
+		}
+		rootsFile, err := os.Stat(path.Join(dir, entry.Name(), expanders.COMMIT_FILE))
+		if err != nil {
+			continue
+		}
+		if rootsFile.Size() != rootSize {
 			continue
 		}
 		files, err := ioutil.ReadDir(path.Join(dir, entry.Name()))
 		if err != nil {
 			return count, err
 		}
-		size := int64(0)
 		for _, file := range files {
-			if file.IsDir() {
+			if !file.IsDir() {
 				continue
 			}
-			size += file.Size()
-		}
-		if size == total {
-			count++
+			size := int64(0)
+			layers, err := ioutil.ReadDir(path.Join(dir, entry.Name(), file.Name()))
+			if err != nil {
+				return count, err
+			}
+			for _, layer := range layers {
+				if layer.IsDir() {
+					continue
+				}
+				size += layer.Size()
+			}
+			if size == fileTotalSize {
+				count++
+			}
 		}
 	}
 	return count, nil

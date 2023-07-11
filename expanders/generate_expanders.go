@@ -8,7 +8,7 @@ func ConstructStackedExpanders(k, n, d int64) *Expanders {
 	return NewExpanders(k, n, d)
 }
 
-func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count int64) {
+func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count ...int64) {
 
 	if node == nil || expanders == nil ||
 		cap(node.Parents) != int(expanders.D+1) {
@@ -21,7 +21,7 @@ func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count int64) 
 		return
 	}
 
-	lens := len(MinerID) + 8*18
+	lens := len(MinerID) + 8*17 + len(Count)*8
 	content := make([]byte, lens)
 	util.CopyData(content, MinerID, GetBytes(Count), GetBytes(layer))
 	node.AddParent(node.Index - NodeType(expanders.N))

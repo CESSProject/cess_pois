@@ -18,7 +18,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("save key error", err)
 	}
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 8192*2)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 8192*2, 64)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
@@ -28,20 +28,16 @@ func TestPois(t *testing.T) {
 	}
 	verifier := pois.NewVerifier(k, n, d)
 
-	//run idle file generation server
-	prover.RunIdleFileGenerationServer(4)
-
-	//add file to generate
-	ok := prover.GenerateFile(4)
-	if !ok {
-		t.Fatal("generate file error")
-	}
-	//wait 8 minutes for file generate
-	//time.Sleep(time.Minute * 12)
 	ts := time.Now()
+	err = prover.GenerateIdleFileSet()
+	if err != nil {
+		t.Fatal("generate idle file set error", err)
+	}
+	t.Log("generate idle file set time", time.Since(ts))
 
 	//get commits
-	commits, err := prover.GetCommits(4)
+	ts = time.Now()
+	commits, err := prover.GetIdleFileSetCommits()
 	if err != nil {
 		t.Fatal("get commits error", err)
 	}
@@ -59,7 +55,7 @@ func TestPois(t *testing.T) {
 
 	//generate commits challenges
 	ts = time.Now()
-	chals, err := verifier.CommitChallenges(prover.ID, 0, 4)
+	chals, err := verifier.CommitChallenges(prover.ID)
 	if err != nil {
 		t.Fatal("generate commit challenges error", err)
 	}
