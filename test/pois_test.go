@@ -13,18 +13,19 @@ import (
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(7), int64(1024*1024*4), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("save key error", err)
-	}
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 8192*2, 64)
+	k, n, d := int64(7), int64(1024*1024), int64(64)
+	// key, err := ParseKey("./key")
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
+	key := acc.RsaKeygen(2048)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*64*8, 64)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 0)
+	err = prover.Init(key)
 	if err != nil {
-		t.Fatal("init prover error", err)
+		t.Fatal("recovery prover error", err)
 	}
 	verifier := pois.NewVerifier(k, n, d)
 

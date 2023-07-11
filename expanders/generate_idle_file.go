@@ -61,7 +61,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	counts := make([]int64, size)
 	setDir := path.Join(rootDir, fmt.Sprintf("%s-%d", SET_DIR_NAME, (start+size)/size))
 	for i := start; i < start+size; i++ {
-		dir := path.Join(rootDir, setDir, fmt.Sprintf("%s-%d", IDLE_DIR_NAME, i))
+		dir := path.Join(setDir, fmt.Sprintf("%s-%d", IDLE_DIR_NAME, i))
 		if err := MakeProofDir(dir); err != nil {
 			errors.Wrap(err, "generate idle file error")
 		}
