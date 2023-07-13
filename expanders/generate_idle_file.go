@@ -68,12 +68,12 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 		counts[i-start] = i
 	}
 	//create aux slices
-	roots := make([][]byte, (expanders.K+2)*size)
+	roots := make([][]byte, (expanders.K+1)*size+1)
 	parents := expanders.FilePool.Get().(*[]byte)
 	labels := expanders.FilePool.Get().(*[]byte)
 	readBuf := expanders.NodesPool.Get().(*[]Node)
 	writeBuf := expanders.NodesPool.Get().(*[]Node)
-	rsignal, wsignal := make(chan struct{}, 1), make(chan struct{}, 1)
+	rsignal, wsignal := make(chan struct{}), make(chan struct{})
 
 	//calc nodes relationship
 	go func() {
@@ -93,6 +93,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	hash := NewHash()
 	frontSize := len(minerID) + int(unsafe.Sizeof(NodeType(0))) + 8
 	label := make([]byte, frontSize+int(size)*HashSize+int(expanders.D+1)*HashSize)
+	zero := make([]byte, int(size)*HashSize+int(expanders.D+1)*HashSize)
 	util.CopyData(label, minerID)
 
 	for i := int64(0); i <= expanders.K; i++ {
@@ -109,7 +110,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 				}
 			}
 			for k := int64(0); k < expanders.N; k++ {
-				node := &(*writeBuf)[k]
+				node := &(*readBuf)[k]
 				util.CopyData(label[len(minerID)+8:], GetBytes(node.Index))
 				if i > 0 && !node.NoParents() {
 					bcount := frontSize
@@ -125,10 +126,12 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 					}
 					//add files relationship
 					util.CopyData(label[bcount:], roots[(i-1)*size:i*size]...)
+				} else {
+					util.CopyData(label[frontSize:], zero) //clean label rear.  label:[  front  |   rear     ]
 				}
 				hash.Reset()
 				if j > 0 { //add same layer dependency relationship
-					hash.Write(append(label, roots[i*size+j]...))
+					hash.Write(append(label, roots[i*size+j-1]...))
 				} else {
 					hash.Write(label)
 				}
@@ -146,7 +149,9 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 			}
 		}
 	}
-
+	//return memory space
+	expanders.NodesPool.Put(readBuf)
+	expanders.NodesPool.Put(writeBuf)
 	expanders.FilePool.Put(parents)
 	expanders.FilePool.Put(labels)
 	//calculate new dir name
@@ -154,7 +159,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	for i := 0; i < len(roots); i++ {
 		hash.Write(roots[i])
 	}
-	roots[expanders.K+1] = hash.Sum(nil)
+	roots[(expanders.K+1)*size] = hash.Sum(nil)
 
 	if err := util.SaveProofFile(path.Join(setDir, COMMIT_FILE), roots); err != nil {
 		return errors.Wrap(err, "generate idle file error")

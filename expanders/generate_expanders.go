@@ -65,21 +65,3 @@ func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count ...int6
 		}
 	}
 }
-
-func (expanders *Expanders) RunRelationalMapServer(MinerID []byte, Count int64) <-chan *Node {
-
-	out := make(chan *Node, (expanders.N/1024)*4)
-
-	go func() {
-		for l := int64(0); l <= expanders.K; l++ {
-			for index := int64(0); index < expanders.N; index++ {
-				node := expanders.NodePool.Get().(*Node)
-				node.Index = NodeType(index + expanders.N*l)
-				node.Parents = node.Parents[:0]
-				CalcParents(expanders, node, MinerID, Count)
-				out <- node
-			}
-		}
-	}()
-	return out
-}

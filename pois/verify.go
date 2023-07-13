@@ -199,6 +199,7 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 	frontSize := int(unsafe.Sizeof(expanders.NodeType(0))) + len(ID) + 8
 	hashSize := expanders.HashSize
 	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize+int(IdleSetLen)*hashSize)
+	zero := make([]byte, int(v.Expanders.D+1)*hashSize+int(IdleSetLen)*hashSize)
 	for i := 0; i < len(proofs); i++ {
 
 		if chals[i][1] != int64(proofs[i][0].Node.Index) {
@@ -206,7 +207,11 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 			return errors.Wrap(err, "verify commit proofs error")
 		}
 
-		var idx expanders.NodeType
+		var (
+			idx  expanders.NodeType
+			hash []byte
+		)
+
 		for j := 1; j < len(chals[i]); j++ {
 			if j == 1 {
 				idx = expanders.NodeType(chals[i][1])
@@ -251,10 +256,11 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 				}
 				// add file dependencies
 				util.CopyData(label[size:], pNode.CommitsBuf.Roots[(layer-1)*IdleSetLen:layer*IdleSetLen]...)
+			} else {
+				util.CopyData(label[frontSize:], zero) //clean label rear
 			}
 
-			hash := make([]byte, 0)
-			if (chals[i][1]-1)%IdleSetLen > 0 {
+			if (chals[i][0]-1)%IdleSetLen > 0 {
 				hash = expanders.GetHash(append(label, pNode.CommitsBuf.Roots[layer*IdleSetLen+(chals[i][0]-1)%IdleSetLen-1]...))
 			} else {
 				hash = expanders.GetHash(label)

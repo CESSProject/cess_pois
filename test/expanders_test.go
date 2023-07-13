@@ -43,20 +43,6 @@ func TestIdleFileSetGenerationParallely(t *testing.T) {
 	t.Log("generate idle file set time", time.Since(ts))
 }
 
-func TestRealationMap(t *testing.T) {
-	graph := expanders.ConstructStackedExpanders(7, 1024*1024*4, 64)
-	ch := graph.RunRelationalMapServer([]byte("test id"), 1)
-	ts := time.Now()
-	count := 1
-	for range ch {
-		if count >= int((graph.K+1)*graph.N) {
-			break
-		}
-		count++
-	}
-	t.Log("time", time.Since(ts))
-}
-
 func TestRealationshipGeneration(t *testing.T) {
 	graph := expanders.ConstructStackedExpanders(7, 1024*1024*4, 64)
 	node := expanders.NewNode(0)

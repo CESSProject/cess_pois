@@ -22,7 +22,7 @@ var (
 	FileSize       int64  = int64(expanders.HashSize)
 	AccPath        string = acc.DEFAULT_PATH
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
-	MaxProofThread        = 16
+	MaxProofThread        = 4 //please set according to the number of cores
 )
 
 type Prover struct {
@@ -325,33 +325,44 @@ func (p *Prover) ProveCommitAndAcc(challenges [][]int64) ([][]CommitProof, *AccP
 
 // ProveCommit prove commits no more than MaxCommitProofThread
 func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
-	var (
-		threads int
-		err     error
-	)
+
+	var err error
 	lens := len(challenges)
-	if lens < MaxProofThread {
-		threads = lens
-	} else {
-		threads = MaxProofThread
-	}
 	proofSet := make([][]CommitProof, lens)
-	counts := make([]int64, len(challenges))
-	for i := 0; i < len(challenges); i++ {
+	counts := make([]int64, lens)
+	ch := make(chan struct {
+		idx   int
+		chals []int64
+	}, lens)
+
+	for i := 0; i < lens; i++ {
 		counts[i] = challenges[i][0]
+		ch <- struct {
+			idx   int
+			chals []int64
+		}{i, challenges[i]}
+	}
+	close(ch)
+
+	if lens > MaxProofThread {
+		lens = MaxProofThread
 	}
 	wg := sync.WaitGroup{}
-	wg.Add(threads)
-	for i := 0; i < threads; i++ {
-		idx := i
+	wg.Add(lens)
+	for i := 0; i < lens; i++ {
 		ants.Submit(func() {
 			defer wg.Done()
-			proofs, e := p.proveCommit(challenges[idx], counts)
-			if e != nil {
-				err = e
-				return
+			for c := range ch {
+				if c.chals == nil {
+					return
+				}
+				proofs, e := p.proveCommit(c.chals, counts)
+				if e != nil {
+					err = e
+					return
+				}
+				proofSet[c.idx] = proofs
 			}
-			proofSet[idx] = proofs
 		})
 	}
 	wg.Wait()
@@ -371,12 +382,12 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 		proof.Indexs[i] = challenges[i][0]
 		labels[i], err = p.ReadAndCalcFileLabel(challenges[i][0])
 		if err != nil {
-			return nil, errors.Wrap(err, "update acc and Count error")
+			return nil, errors.Wrap(err, "update acc error")
 		}
 	}
 	proof.WitChains, proof.AccPath, err = p.AccManager.AddElementsAndProof(labels)
 	if err != nil {
-		return nil, errors.Wrap(err, "update acc and Count error")
+		return nil, errors.Wrap(err, "update acc error")
 	}
 	proof.Labels = labels
 	return proof, nil
@@ -385,7 +396,7 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 func (p *Prover) ReadAndCalcFileLabel(index int64) ([]byte, error) {
 	fname := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, index/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (index-1)/p.setLen+1),
 		expanders.COMMIT_FILE,
 	)
 	roots, err := util.ReadProofFile(
@@ -402,7 +413,7 @@ func (p *Prover) ReadAndCalcFileLabel(index int64) ([]byte, error) {
 func (p *Prover) ReadFileLabels(index int64, buf []byte) error {
 	name := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, index/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (index-1)/p.setLen+1),
 		fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, index),
 		fmt.Sprintf("%s-%d", expanders.LAYER_NAME, p.Expanders.K),
 	)
@@ -420,7 +431,7 @@ func (p *Prover) proveCommit(challenge []int64, counts []int64) ([]CommitProof, 
 	proofs := make([]CommitProof, len(challenge)-1)
 	fdir := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, challenge[0]/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (challenge[0]-1)/p.setLen+1),
 		fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, challenge[0]),
 	)
 	proofs[0], err = p.generateCommitProof(fdir, counts, challenge[1])
@@ -667,10 +678,10 @@ func (p *Prover) organizeFiles(num int64) error {
 				return err
 			}
 		}
-		name := path.Join(dir, expanders.COMMIT_FILE)
-		if err := util.DeleteFile(name); err != nil {
-			return err
-		}
+	}
+	name := path.Join(dir, expanders.COMMIT_FILE)
+	if err := util.DeleteFile(name); err != nil {
+		return err
 	}
 	p.space += num * p.Expanders.K * FileSize
 	return nil
@@ -680,7 +691,7 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 	for i := int64(1); i <= num; i++ {
 		dir := path.Join(
 			IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (p.front+i)/p.setLen+1),
+			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (p.front+i-1)/p.setLen+1),
 			fmt.Sprintf("%s-%d", expanders.IDLE_DIR_NAME, p.front+i),
 		)
 		if err := util.DeleteDir(dir); err != nil {
