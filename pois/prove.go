@@ -103,6 +103,7 @@ func NewProver(k, n, d int64, ID []byte, space, setLen int64) (*Prover, error) {
 	prover.Expanders = expanders.ConstructStackedExpanders(k, n, d)
 	prover.space = space
 	prover.setLen = setLen
+	tree.InitMhtPool(int(n), expanders.HashSize)
 	return prover, nil
 }
 
@@ -464,7 +465,7 @@ func (p *Prover) generateCommitProof(fdir string, counts []int64, c int64) (Comm
 	var nodeTree, parentTree *tree.LightMHT
 	index := c % p.Expanders.N
 	nodeTree = tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-	defer tree.RecoveryMht(nodeTree)
+	defer tree.RecycleMht(nodeTree)
 	pathProof, err := nodeTree.GetPathProof(*data, int(index), expanders.HashSize)
 	if err != nil {
 		return CommitProof{}, errors.Wrap(err, "generate commit proof error")
@@ -494,7 +495,7 @@ func (p *Prover) generateCommitProof(fdir string, counts []int64, c int64) (Comm
 		return proof, errors.Wrap(err, "generate commit proof error")
 	}
 	parentTree = tree.CalcLightMhtWithBytes(*pdata, expanders.HashSize, true)
-	defer tree.RecoveryMht(parentTree)
+	defer tree.RecycleMht(parentTree)
 	lens := len(node.Parents)
 	parentProofs := make([]*MhtProof, lens)
 	wg := sync.WaitGroup{}
@@ -596,7 +597,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 						Label: label,
 					}
 				}
-				tree.RecoveryMht(mht)
+				tree.RecycleMht(mht)
 			}
 		})
 	}
@@ -647,7 +648,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 			}
 			mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
 			roots[i-1] = mht.GetRoot(expanders.HashSize)
-			tree.RecoveryMht(mht)
+			tree.RecycleMht(mht)
 		}
 		wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
 		if err != nil {

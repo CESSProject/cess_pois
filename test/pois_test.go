@@ -13,22 +13,22 @@ import (
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(3), int64(1024), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("parse key error", err)
-	}
-	// key := acc.RsaKeygen(2048)
-	// err := SaveKey("./key", key)
+	k, n, d := int64(7), int64(1024*1024), int64(64)
+	// key, err := ParseKey("./key")
 	// if err != nil {
-	// 	t.Fatal("save key error", err)
+	// 	t.Fatal("parse key error", err)
 	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*64*8, 64)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 32, 64)
-	//err = prover.Init(key)
+	//err = prover.Recovery(key, 32, 64)
+	err = prover.Init(key)
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
@@ -50,7 +50,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 32, 64)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -112,7 +112,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 33, 129)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 65)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}

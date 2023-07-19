@@ -97,7 +97,7 @@ func calcLightMht(mht LightMHT, size int) *LightMHT {
 	return &mht
 }
 
-func RecoveryMht(mht *LightMHT) {
+func RecycleMht(mht *LightMHT) {
 	if pool != nil {
 		pool.Put(mht)
 	}

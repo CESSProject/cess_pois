@@ -3,7 +3,6 @@ package test
 import (
 	"cess_pois/expanders"
 	"cess_pois/tree"
-	_ "net/http/pprof"
 	"sync"
 	"testing"
 	"time"
@@ -15,14 +14,14 @@ func TestIdleFileSetGeneration(t *testing.T) {
 	graph := expanders.ConstructStackedExpanders(7, 1024*1024, 64)
 	t.Log("construct stacked expanders time", time.Since(ts))
 	ts = time.Now()
-	err := graph.GenerateIdleFileSet([]byte("test miner id"), 1, 128, expanders.DEFAULT_IDLE_FILES_PATH)
+	err := graph.GenerateIdleFileSet([]byte("test miner id"), 1, 32, expanders.DEFAULT_IDLE_FILES_PATH)
 	if err != nil {
 		t.Log("generate idle file set", err)
 	}
 	t.Log("generate idle file set time", time.Since(ts))
 }
 
-func TestIdleFileSetGenerationParallely(t *testing.T) {
+func TestIdleFilesSetGenerationParallely(t *testing.T) {
 	ts := time.Now()
 	tree.InitMhtPool(1024*1024, expanders.HashSize)
 	graph := expanders.ConstructStackedExpanders(7, 1024*1024, 64)

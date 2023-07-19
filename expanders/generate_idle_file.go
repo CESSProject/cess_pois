@@ -73,7 +73,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	labels := expanders.FilePool.Get().(*[]byte)
 	readBuf := expanders.NodesPool.Get().(*[]Node)
 	writeBuf := expanders.NodesPool.Get().(*[]Node)
-	rsignal, wsignal := make(chan struct{}), make(chan struct{})
+	rsignal, wsignal := make(chan struct{}, 1), make(chan struct{}, 1)
 
 	//calc nodes relationship
 	go func() {
@@ -140,7 +140,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 			//calc merkel tree root hash
 			ltree := tree.CalcLightMhtWithBytes((*labels), HashSize, true)
 			roots[i*size+j] = ltree.GetRoot(HashSize)
-			tree.RecoveryMht(ltree)
+			tree.RecycleMht(ltree)
 			//save one layer labels of one file
 			if err := util.SaveFile(path.Join(
 				setDir, fmt.Sprintf("%s-%d", IDLE_DIR_NAME, counts[j]),
