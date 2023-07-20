@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	DEFAULT_PATH        = "./acc/"
+	DEFAULT_PATH        = "./accumulator/"
 	DEFAULT_DIR_PERM    = 0777
 	DEFAULT_ELEMS_NUM   = 1024
 	DEFAULT_LEVEL       = 3

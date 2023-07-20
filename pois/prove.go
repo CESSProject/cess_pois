@@ -1,6 +1,7 @@
 package pois
 
 import (
+	"bytes"
 	"cess_pois/acc"
 	"cess_pois/expanders"
 	"cess_pois/tree"
@@ -21,6 +22,7 @@ var (
 	FileSize       int64  = int64(expanders.HashSize)
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	AccPath        string = acc.DEFAULT_PATH
+	AccBackupPath  string = fmt.Sprint("%s.backup", AccPath)
 	MaxProofThread        = 16
 )
 
@@ -49,9 +51,10 @@ type context struct {
 }
 
 type ChainState struct {
-	Acc   acc.AccHandle
-	Rear  int64
-	Front int64
+	Acc         acc.AccHandle
+	challenging bool
+	Rear        int64
+	Front       int64
 }
 
 type MhtProof struct {
@@ -114,11 +117,6 @@ func (p *Prover) Init(key acc.RsaKey) error {
 	if err != nil {
 		return errors.Wrap(err, "init prover error")
 	}
-	p.chainState = &ChainState{
-		Acc:   p.AccManager.GetSnapshot(),
-		Rear:  0,
-		Front: 0,
-	}
 	return nil
 }
 
@@ -132,12 +130,6 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
 	p.AccManager, err = acc.Recovery(AccPath, key, front, rear)
 	if err != nil {
 		return errors.Wrap(err, "recovery prover error")
-	}
-	//recovery chain state
-	p.chainState = &ChainState{
-		Acc:   p.AccManager.GetSnapshot(),
-		Rear:  rear,
-		Front: front,
 	}
 	//recovery front and rear
 	p.front = front
@@ -154,6 +146,23 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
 	p.commited = rear
 	p.space -= (p.rear - p.front) * FileSize                //calc proved space
 	p.space -= generated * (FileSize * (p.Expanders.K + 1)) //calc generated space
+	return nil
+}
+
+func (p *Prover) RecoveryChainState(key acc.RsaKey, accSnp []byte, front, rear int64) error {
+	p.chainState = &ChainState{
+		Rear:  rear,
+		Front: front,
+	}
+	var err error
+	p.chainState.Acc, err = acc.Recovery(AccBackupPath, key, front, rear)
+	if err != nil {
+		return errors.Wrap(err, "recovery chain state error")
+	}
+	if !bytes.Equal(accSnp, p.chainState.Acc.GetSnapshot().Accs.Value) {
+		err = errors.New("the restored acc value is not equal to the snapshot value")
+		return errors.Wrap(err, "recovery chain state error")
+	}
 	return nil
 }
 
@@ -242,6 +251,12 @@ func (p *Prover) GetSpace() int64 {
 	return p.space
 }
 
+func (p *Prover) ReturnSpace(size int64) {
+	p.rw.Lock()
+	p.space += size
+	p.rw.Unlock()
+}
+
 // GetCount get Count Safely
 func (p *Prover) GetRear() int64 {
 	p.rw.RLock()
@@ -256,19 +271,27 @@ func (p *Prover) GetFront() int64 {
 }
 
 // RestProofedCounter must be called when space proof is finished
-func (p *Prover) RestProofedCounter() {
+func (p *Prover) RestChallengeState() {
 	p.rw.Lock()
 	defer p.rw.Unlock()
 	p.proofed = 0
+	p.chainState.challenging = false
 }
 
-func (p *Prover) UpdateChainState() {
-	p.rw.RLock()
-	defer p.rw.RUnlock()
-	//If doing Proof of Space at this time, you are not allowed to update the chain state
-	p.chainState.Acc = p.AccManager.GetSnapshot()
-	p.chainState.Rear = p.rear
-	p.chainState.Front = p.front
+func (p *Prover) SetChallengeState(challenging bool) error {
+	p.rw.Lock()
+	defer p.rw.Unlock()
+	if !challenging && !p.chainState.challenging {
+		p.chainState.Acc = p.AccManager.GetSnapshot()
+		p.chainState.Rear = p.rear
+		p.chainState.Front = p.front
+		//backup acc file
+		if err := util.CopyFiles(AccPath, AccBackupPath); err != nil {
+			return err
+		}
+	}
+	p.chainState.challenging = true
+	return nil
 }
 
 // RunIdleFileGenerationServer be used to start idle file generation server
