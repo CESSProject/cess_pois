@@ -15,7 +15,7 @@ import (
 const (
 	DEFAULT_PATH        = "./accumulator/"
 	DEFAULT_DIR_PERM    = 0777
-	DEFAULT_ELEMS_NUM   = 1024
+	DEFAULT_ELEMS_NUM   = 256
 	DEFAULT_LEVEL       = 3
 	DEFAULT_NAME        = "sub-acc"
 	DEFAULT_BACKUP_NAME = "backup-sub-acc"

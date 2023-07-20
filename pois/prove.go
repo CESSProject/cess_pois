@@ -22,7 +22,7 @@ var (
 	FileSize       int64  = int64(expanders.HashSize)
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	AccPath        string = acc.DEFAULT_PATH
-	AccBackupPath  string = fmt.Sprint("%s.backup", AccPath)
+	AccBackupPath  string = fmt.Sprintf("%s.backup", AccPath)
 	MaxProofThread        = 16
 )
 
