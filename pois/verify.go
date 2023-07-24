@@ -2,15 +2,16 @@ package pois
 
 import (
 	"bytes"
-	"cess_pois/acc"
-	"cess_pois/expanders"
-	"cess_pois/tree"
-	"cess_pois/util"
 	"crypto/rand"
 	"encoding/hex"
 	"math"
 	"math/big"
 	"unsafe"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
+	"github.com/CESSProject/cess_pois/tree"
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
 )

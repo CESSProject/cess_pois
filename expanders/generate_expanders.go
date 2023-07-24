@@ -1,7 +1,7 @@
 package expanders
 
 import (
-	"cess_pois/util"
+	"github.com/CESSProject/cess_pois/util"
 )
 
 func ConstructStackedExpanders(k, n, d int64) *Expanders {

@@ -1,7 +1,6 @@
 package acc
 
 import (
-	"cess_pois/util"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +8,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
 )

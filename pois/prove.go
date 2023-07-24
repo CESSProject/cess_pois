@@ -2,10 +2,6 @@ package pois
 
 import (
 	"bytes"
-	"cess_pois/acc"
-	"cess_pois/expanders"
-	"cess_pois/tree"
-	"cess_pois/util"
 	"fmt"
 	"io/ioutil"
 	"path"
@@ -13,6 +9,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
+	"github.com/CESSProject/cess_pois/tree"
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
