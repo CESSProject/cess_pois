@@ -13,7 +13,7 @@ import (
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(7), int64(1024*1024), int64(64)
+	k, n, d := int64(8), int64(256), int64(64)
 	// key, err := ParseKey("./key")
 	// if err != nil {
 	// 	t.Fatal("parse key error", err)
@@ -23,7 +23,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("save key error", err)
 	}
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*64*8, 64)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*64*16, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
@@ -55,7 +55,7 @@ func TestPois(t *testing.T) {
 	//verifier receive commits
 	ts = time.Now()
 	if !verifier.ReceiveCommits(prover.ID, commits) {
-		t.Fatal("receive commits error", err)
+		t.Fatal("receive commits error")
 	}
 	t.Log("verifier receive commits time", time.Since(ts))
 
@@ -100,7 +100,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("update status error", err)
 	}
-	prover.UpdateChainState()
+	// prover.UpdateChainState()
 	t.Log("update prover status time", time.Since(ts))
 	//generate space challenges
 	ts = time.Now()
@@ -112,7 +112,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1, 65)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}

@@ -11,7 +11,7 @@ import (
 func TestIdleFileSetGeneration(t *testing.T) {
 	ts := time.Now()
 	tree.InitMhtPool(1024*1024, expanders.HashSize)
-	graph := expanders.ConstructStackedExpanders(7, 1024*1024, 64)
+	graph := expanders.ConstructStackedExpanders(8, 1024*1024, 64)
 	t.Log("construct stacked expanders time", time.Since(ts))
 	ts = time.Now()
 	err := graph.GenerateIdleFileSet([]byte("test miner id"), 1, 32, expanders.DEFAULT_IDLE_FILES_PATH)
