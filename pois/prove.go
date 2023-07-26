@@ -335,7 +335,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (commited+p.setLen)/p.setLen),
 		expanders.COMMIT_FILE,
 	)
-	rootNum := int(commitNum + (p.Expanders.K-1)*p.setLen + 1)
+	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1)
 	commits.Roots, err = util.ReadProofFile(name, rootNum, expanders.HashSize)
 	if err != nil {
 		return commits, errors.Wrap(err, "get commits error")
@@ -430,7 +430,7 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 		expanders.COMMIT_FILE,
 	)
 	roots, err := util.ReadProofFile(
-		fname, int(p.Expanders.K+1)*int(p.setLen)+1, expanders.HashSize)
+		fname, int(p.Expanders.K+p.clusterSize)*int(p.setLen)+1, expanders.HashSize)
 	if err != nil {
 		return nil, errors.Wrap(err, "update acc error")
 	}
@@ -442,7 +442,7 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 			root := roots[(p.Expanders.K+j)*p.setLen+i]
 			label := append([]byte{}, p.ID...)
 			label = append(label, expanders.GetBytes(index)...)
-			labels[i] = expanders.GetHash(append(label, root...))
+			labels[i*p.clusterSize+j] = expanders.GetHash(append(label, root...))
 		}
 	}
 	proof.WitChains, proof.AccPath, err = p.AccManager.AddElementsAndProof(labels)
@@ -475,13 +475,16 @@ func (p *Prover) proveCommit(challenge []int64, clusters []int64) ([]CommitProof
 		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (challenge[0]-1)/p.setLen+1),
 		fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, challenge[0]),
 	)
-	clusterLen := (p.Expanders.K + 1) / 2
 	for i := int64(1); i <= int64(len(proofs)); i++ {
 		index := challenge[i]
-		if i > clusterLen+1 {
+		if i > p.clusterSize+1 {
 			index = int64(proofs[i-2].Parents[challenge[i]].Index)
 		}
-		proofs[i-1], err = p.generateCommitProof(fdir, clusters, index, p.Expanders.K+clusterLen-i)
+		layer := index / p.Expanders.N
+		if i < p.clusterSize+1 {
+			layer = p.Expanders.K + i - 1
+		}
+		proofs[i-1], err = p.generateCommitProof(fdir, clusters, index, layer)
 		if err != nil {
 			return nil, errors.Wrap(err, "prove one file commit error")
 		}
@@ -491,7 +494,7 @@ func (p *Prover) proveCommit(challenge []int64, clusters []int64) ([]CommitProof
 
 func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int64) (CommitProof, error) {
 
-	if subfile < 0 || subfile > (p.Expanders.K+1)/2+p.Expanders.K {
+	if subfile < 0 || subfile > p.clusterSize+p.Expanders.K-1 {
 		return CommitProof{}, errors.New("generate commit proof error: bad node index")
 	}
 
@@ -621,7 +624,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 				if fidx == 0 {
 					break
 				}
-				err := p.ReadFileLabels(fidx/p.clusterSize+1, (fidx-1)%p.clusterSize, *data)
+				err = p.ReadFileLabels((fidx-1)/p.clusterSize+1, (fidx-1)%p.clusterSize, *data)
 				if err != nil {
 					return
 				}
@@ -691,7 +694,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 		defer p.Expanders.FilePool.Put(data)
 		roots := make([][]byte, num)
 		for i := int64(1); i <= num; i++ {
-			cluster, subfile := (p.front+i)/p.clusterSize+1, (p.front+i-1)%p.clusterSize
+			cluster, subfile := (p.front+i-1)/p.clusterSize+1, (p.front+i-1)%p.clusterSize
 			if err := p.ReadFileLabels(cluster, subfile, *data); err != nil {
 				Err <- errors.Wrap(err, "prove deletion error")
 				return
@@ -718,12 +721,12 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 func (p *Prover) organizeFiles(num int64) error {
 	dir := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, p.rear/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, p.rear/(p.clusterSize*p.setLen)+1),
 	)
-	for i := p.rear + 1; i <= p.rear+num; i++ {
+	for i := p.rear + 1; i <= p.rear+num; i += 8 {
 		for j := 0; j < int(p.Expanders.K); j++ {
 			name := path.Join(dir,
-				fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, i),
+				fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
 				fmt.Sprintf("%s-%d", expanders.FILE_NAME, j))
 			if err := util.DeleteFile(name); err != nil {
 				return err
@@ -740,13 +743,14 @@ func (p *Prover) organizeFiles(num int64) error {
 
 func (p *Prover) deleteFiles(num int64, raw bool) error {
 	for i := int64(1); i <= num; i++ {
-		dir := path.Join(
+		fpath := path.Join(
 			IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (p.front+i-1)/p.setLen+1),
-			fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, p.front+i),
+			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (p.front+i-1)/(p.setLen*p.clusterSize)+1),
+			fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
+			fmt.Sprintf("%s-%d", expanders.FILE_NAME, (i-1)%p.clusterSize+p.Expanders.K),
 		)
-		if err := util.DeleteDir(dir); err != nil {
-			return errors.Wrap(err, "delete files error")
+		if err := util.DeleteFile(fpath); err != nil {
+			return errors.Wrap(err, "delete file error")
 		}
 	}
 	if !raw {
@@ -760,8 +764,8 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 
 	count := int64(0)
-	fileTotalSize := FileSize * (p.Expanders.K + 1) * 1024 * 1024
-	rootSize := (p.setLen*(p.Expanders.K+1) + 1) * int64(expanders.HashSize)
+	fileTotalSize := FileSize * (p.Expanders.K + p.clusterSize) * 1024 * 1024
+	rootSize := (p.setLen*(p.Expanders.K+p.clusterSize) + 1) * int64(expanders.HashSize)
 	entries, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return count, err
@@ -771,7 +775,8 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 		if len(sidxs) < 2 {
 			continue
 		}
-		if idx, err := strconv.ParseInt(sidxs[1], 10, 64); err != nil || idx*p.setLen <= p.rear {
+		if idx, err := strconv.ParseInt(sidxs[2], 10, 64); err != nil ||
+			idx*p.setLen*p.clusterSize <= p.rear {
 			continue
 		}
 		if !entry.IsDir() {
@@ -784,24 +789,24 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 		if rootsFile.Size() != rootSize {
 			continue
 		}
-		files, err := ioutil.ReadDir(path.Join(dir, entry.Name()))
+		clusters, err := ioutil.ReadDir(path.Join(dir, entry.Name()))
 		if err != nil {
 			return count, err
 		}
-		for _, file := range files {
-			if !file.IsDir() {
+		for _, cluster := range clusters {
+			if !cluster.IsDir() {
 				continue
 			}
 			size := int64(0)
-			layers, err := ioutil.ReadDir(path.Join(dir, entry.Name(), file.Name()))
+			files, err := ioutil.ReadDir(path.Join(dir, entry.Name(), cluster.Name()))
 			if err != nil {
 				return count, err
 			}
-			for _, layer := range layers {
-				if layer.IsDir() {
+			for _, file := range files {
+				if file.IsDir() {
 					continue
 				}
-				size += layer.Size()
+				size += file.Size()
 			}
 			if size == fileTotalSize {
 				count++
