@@ -73,12 +73,12 @@ type MutiLevelAcc struct {
 	FilePath  string
 }
 
-func Recovery(path string, key RsaKey, front, rear int64) (AccHandle, error) {
-	if path == "" {
-		path = DEFAULT_PATH
+func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) {
+	if accPath == "" {
+		accPath = DEFAULT_PATH
 	}
-	if _, err := os.Stat(path); err != nil {
-		err := os.MkdirAll(path, DEFAULT_DIR_PERM)
+	if _, err := os.Stat(accPath); err != nil {
+		err := os.MkdirAll(accPath, DEFAULT_DIR_PERM)
 		if err != nil {
 			return nil, errors.Wrap(err, "recovery muti-acc error")
 		}
@@ -90,7 +90,7 @@ func Recovery(path string, key RsaKey, front, rear int64) (AccHandle, error) {
 		Accs:     acc,
 		Key:      key,
 		rw:       new(sync.RWMutex),
-		FilePath: path,
+		FilePath: accPath,
 		stable:   true,
 		isDel:    new(atomic.Bool),
 		Deleted:  int(front),
@@ -541,7 +541,8 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	if rear == int64(acc.Deleted) {
 		return nil
 	}
-	for i := 0; i <= (int(rear)-acc.Deleted)/DEFAULT_ELEMS_NUM; i++ {
+	num := (int(rear) - acc.Deleted - 1) / DEFAULT_ELEMS_NUM
+	for i := 0; i <= num; i++ {
 		index := acc.Deleted/DEFAULT_ELEMS_NUM + i
 		backup, err := readBackup(acc.FilePath, index)
 		if err != nil ||

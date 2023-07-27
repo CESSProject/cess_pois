@@ -14,12 +14,12 @@ import (
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
 	k, n, d := int64(8), int64(1024*1024), int64(64)
-	// key, err := ParseKey("./key")
-	// if err != nil {
-	// 	t.Fatal("parse key error", err)
-	// }
-	key := acc.RsaKeygen(2048)
-	err := SaveKey("./key", key)
+	key, err := ParseKey("./key")
+	if err != nil {
+		t.Fatal("parse key error", err)
+	}
+	// key := acc.RsaKeygen(2048)
+	// err := SaveKey("./key", key)
 	if err != nil {
 		t.Fatal("save key error", err)
 	}
@@ -27,11 +27,18 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	//err = prover.Recovery(key, 32, 64)
+	//err = prover.Recovery(key, 32, 256)
 	err = prover.Init(key)
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
+
+	//test recovery chain state
+	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 32, 256)
+	if err != nil {
+		t.Fatal("recovery chain state error", err)
+	}
+
 	verifier := pois.NewVerifier(k, n, d)
 
 	ts := time.Now()
@@ -50,7 +57,7 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 32, 256)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -158,6 +165,10 @@ func TestPois(t *testing.T) {
 	err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
 	if err != nil {
 		t.Fatal("update count error", err)
+	}
+	err = prover.SetChallengeState(false)
+	if err != nil {
+		t.Fatal("update chain status error", err)
 	}
 	t.Log("update prover status time", time.Since(ts))
 }

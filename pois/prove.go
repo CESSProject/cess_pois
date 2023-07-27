@@ -22,7 +22,7 @@ import (
 var (
 	FileSize       int64  = int64(expanders.HashSize)
 	AccPath        string = acc.DEFAULT_PATH
-	AccBackupPath  string = fmt.Sprintf("%s.backup", AccPath)
+	AccBackupPath  string = "./chain-state-backup"
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 4 //please set according to the number of cores
 )
