@@ -28,7 +28,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("new prover error", err)
 	}
 	//err = prover.Recovery(key, 32, 256)
-	err = prover.Init(key)
+	err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}

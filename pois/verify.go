@@ -23,11 +23,10 @@ var (
 )
 
 type Record struct {
-	Key    acc.RsaKey
-	Acc    []byte
-	Front  int64
-	Rear   int64
-	record int64
+	Key   acc.RsaKey
+	Acc   []byte
+	Front int64
+	Rear  int64
 }
 
 // ProverNode denote Prover
@@ -67,11 +66,10 @@ func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) *Pr
 	return &ProverNode{
 		ID: ID,
 		Record: &Record{
-			Acc:    acc,
-			Front:  front,
-			Rear:   rear,
-			Key:    key,
-			record: front,
+			Acc:   acc,
+			Front: front,
+			Rear:  rear,
+			Key:   key,
 		},
 	}
 }
@@ -391,7 +389,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 }
 
 func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpaceProof) error {
-	if len(chals) <= 0 || pNode.record+1 != proof.Left || pNode.Rear+1 < proof.Right {
+	if len(chals) <= 0 || proof.Left <= pNode.Front || pNode.Rear+1 < proof.Right { //
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify space proofs error")
 	}
@@ -432,21 +430,6 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 		}
 	}
 	return nil
-}
-
-func (v Verifier) SpaceVerificationHandle(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) func(chals []int64, proof *SpaceProof) (bool, error) {
-	pNode := NewProverNode(ID, key, acc, front, rear)
-	return func(chals []int64, proof *SpaceProof) (bool, error) {
-		err := v.VerifySpace(pNode, chals, proof)
-		if err != nil {
-			return false, err
-		}
-		pNode.record = proof.Right - 1
-		if pNode.record == pNode.Rear {
-			return true, nil
-		}
-		return false, nil
-	}
 }
 
 func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {

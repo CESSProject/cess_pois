@@ -44,6 +44,13 @@ type Prover struct {
 	AccManager acc.AccHandle
 }
 
+type Config struct {
+	AccPath        string
+	AccBackupPath  string
+	IdleFilePath   string
+	MaxProofThread int
+}
+
 type context struct {
 	commited  int64
 	added     int64
@@ -112,10 +119,11 @@ func NewProver(k, n, d int64, ID []byte, space, setLen int64) (*Prover, error) {
 	return prover, nil
 }
 
-func (p *Prover) Init(key acc.RsaKey) error {
+func (p *Prover) Init(key acc.RsaKey, config Config) error {
 	if key.G.BitLen() == 0 || key.N.BitLen() == 0 {
 		return errors.New("bad init params")
 	}
+	checkConfig(config)
 	var err error
 	p.AccManager, err = acc.NewMutiLevelAcc(AccPath, key)
 	if err != nil {
@@ -129,11 +137,12 @@ func (p *Prover) Init(key acc.RsaKey) error {
 	return nil
 }
 
-func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
+func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) error {
 	if key.G.BitLen() == 0 || key.N.BitLen() == 0 ||
 		front < 0 || rear < 0 || front > rear {
 		return errors.New("bad recovery params")
 	}
+	checkConfig(config)
 	var err error
 	//recovery acc
 	p.AccManager, err = acc.Recovery(AccPath, key, front, rear)
@@ -155,6 +164,22 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64) error {
 	p.space -= (p.rear - p.front) * FileSize                //calc proved space
 	p.space -= generated * (FileSize * (p.Expanders.K + 1)) //calc generated space
 	return nil
+}
+
+func checkConfig(config Config) {
+	if config.AccBackupPath != "" {
+		AccBackupPath = config.AccBackupPath
+	}
+	if config.AccPath != "" {
+		AccPath = config.AccPath
+	}
+	if config.IdleFilePath != "" {
+		IdleFilePath = config.IdleFilePath
+	}
+	if config.MaxProofThread > 0 &&
+		MaxProofThread != config.MaxProofThread {
+		MaxProofThread = config.MaxProofThread
+	}
 }
 
 func (p *Prover) RecoveryChainState(key acc.RsaKey, accSnp []byte, front, rear int64) error {
@@ -280,6 +305,14 @@ func (p *Prover) GetFront() int64 {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
 	return p.front
+}
+
+func (p *Prover) GetChainState() ChainState {
+	state := ChainState{
+		Rear:  p.chainState.Rear,
+		Front: p.chainState.Front,
+	}
+	return state
 }
 
 // RestProofedCounter must be called when space proof is finished
