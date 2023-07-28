@@ -1,11 +1,12 @@
 package test
 
 import (
-	"cess_pois/acc"
-	"cess_pois/expanders"
-	"cess_pois/util"
 	"testing"
 	"time"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
+	"github.com/CESSProject/cess_pois/util"
 )
 
 func TestMutiLevelAcc(t *testing.T) {

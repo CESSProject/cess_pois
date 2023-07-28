@@ -2,10 +2,6 @@ package pois
 
 import (
 	"bytes"
-	"cess_pois/acc"
-	"cess_pois/expanders"
-	"cess_pois/tree"
-	"cess_pois/util"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -14,6 +10,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
+	"github.com/CESSProject/cess_pois/tree"
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
@@ -365,7 +366,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 	//read commit file of idle file set
 	name := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (commited+p.setLen)/p.setLen),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (commited)/(p.setLen*p.clusterSize)+1),
 		expanders.COMMIT_FILE,
 	)
 	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1)

@@ -1,4 +1,4 @@
-module cess_pois
+module github.com/CESSProject/cess_pois
 
 go 1.20
 

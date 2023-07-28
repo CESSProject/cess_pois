@@ -1,10 +1,11 @@
 package test
 
 import (
-	"cess_pois/expanders"
 	"crypto/rand"
 	"math/big"
 	"testing"
+
+	"github.com/CESSProject/cess_pois/expanders"
 )
 
 func TestAddNode(t *testing.T) {

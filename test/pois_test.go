@@ -2,33 +2,34 @@ package test
 
 import (
 	"bytes"
-	"cess_pois/acc"
-	"cess_pois/pois"
-	"cess_pois/util"
 	"encoding/binary"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/pois"
+	"github.com/CESSProject/cess_pois/util"
 )
 
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
+	k, n, d := int64(8), int64(1024*16), int64(64)
 	key, err := ParseKey("./key")
 	if err != nil {
 		t.Fatal("parse key error", err)
 	}
 	// key := acc.RsaKeygen(2048)
 	// err := SaveKey("./key", key)
-	if err != nil {
-		t.Fatal("save key error", err)
-	}
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*32*16, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	//err = prover.Recovery(key, 32, 256)
-	err = prover.Init(key, pois.Config{})
+	err = prover.Recovery(key, 32, 256, pois.Config{})
+	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
@@ -57,7 +58,8 @@ func TestPois(t *testing.T) {
 	t.Log("get commits time", time.Since(ts))
 
 	//register prover
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 32, 256)
+
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -171,6 +173,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("update chain status error", err)
 	}
 	t.Log("update prover status time", time.Since(ts))
+	t.Log("acc", prover.AccManager.GetSnapshot().Accs.Value)
 }
 
 func ToBytes(key acc.RsaKey) []byte {

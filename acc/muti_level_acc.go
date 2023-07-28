@@ -2,6 +2,7 @@ package acc
 
 import (
 	"bytes"
+	"io/ioutil"
 	"math"
 	"math/big"
 	"os"
@@ -500,7 +501,15 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 // AddElementsAndProof add elements to muti-level acc and create proof of added elements
 func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]byte, error) {
 	snapshot := acc.GetSnapshot()
+	// group := make([][][]byte, 0)
 	exist := &WitnessNode{Elem: snapshot.Accs.Value}
+	// if acc.CurrCount < DEFAULT_ELEMS_NUM &&
+	// 	len(elems)+acc.CurrCount > DEFAULT_ELEMS_NUM {
+	// 	group = append(group, elems[:DEFAULT_ELEMS_NUM-acc.CurrCount])
+	// }
+	// for i := 0; i <= len(elems); {
+
+	// }
 	err := acc.AddElements(elems)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "proof acc insert error")
@@ -558,14 +567,47 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			}
 		}
 		node := &AccNode{}
+
+		fileNum, err := acc.GetRecoveryFileNum()
+		if err != nil {
+			return err
+		}
+		if fileNum != rear-int64(acc.Deleted) {
+			left, right := 0, len(backup.Values)
+			if i == 0 && acc.Deleted%DEFAULT_ELEMS_NUM > 0 {
+				left = acc.Deleted % DEFAULT_ELEMS_NUM
+			}
+			if i == num && (rear-1)%DEFAULT_ELEMS_NUM != 0 {
+				right = int((rear-1)%DEFAULT_ELEMS_NUM + 1)
+			}
+			backup.Values = backup.Values[left:right]
+		}
 		node.Len = len(backup.Values)
 		node.Value = generateAcc(
-			acc.Key, backup.Wits[node.Len-1],
-			[][]byte{backup.Values[node.Len-1]},
+			acc.Key, acc.Key.G.Bytes(),
+			backup.Values,
 		)
 		acc.addSubAcc(node)
 	}
 	return nil
+}
+
+func (acc *MutiLevelAcc) GetRecoveryFileNum() (int64, error) {
+	var num int64
+	entrys, err := ioutil.ReadDir(acc.FilePath)
+	if err != nil {
+		return num, err
+	}
+
+	for i := 0; i < len(entrys); i++ {
+		files, err := readAccData(acc.FilePath, i)
+		if err != nil {
+			return num, err
+		}
+		num += int64(len(files.Values))
+	}
+
+	return num, nil
 }
 
 // Accumulator validation interface

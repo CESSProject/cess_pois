@@ -1,11 +1,12 @@
 package test
 
 import (
-	"cess_pois/expanders"
-	"cess_pois/tree"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/CESSProject/cess_pois/expanders"
+	"github.com/CESSProject/cess_pois/tree"
 )
 
 func TestIdleFileSetGeneration(t *testing.T) {

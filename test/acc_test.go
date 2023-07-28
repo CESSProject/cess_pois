@@ -1,10 +1,11 @@
 package test
 
 import (
-	"cess_pois/acc"
-	"cess_pois/util"
 	"testing"
 	"time"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/util"
 )
 
 func TestACC(t *testing.T) {

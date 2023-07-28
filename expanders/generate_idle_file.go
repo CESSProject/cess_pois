@@ -1,8 +1,6 @@
 package expanders
 
 import (
-	"cess_pois/tree"
-	"cess_pois/util"
 	"crypto/sha256"
 	"crypto/sha512"
 	"fmt"
@@ -10,6 +8,9 @@ import (
 	"os"
 	"path"
 	"unsafe"
+
+	"github.com/CESSProject/cess_pois/tree"
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
 )

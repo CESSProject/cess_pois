@@ -2,10 +2,11 @@ package expanders
 
 import (
 	"bytes"
-	"cess_pois/util"
 	"encoding/binary"
 	"encoding/json"
 	"sync"
+
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
 )
