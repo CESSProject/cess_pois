@@ -61,7 +61,7 @@ func deleteAccData(dir string, last int) error {
 		if err != nil {
 			return errors.Wrap(err, "delete element data error")
 		}
-		if index >= last {
+		if index <= last {
 			util.DeleteFile(path.Join(dir, f.Name()))
 		}
 	}

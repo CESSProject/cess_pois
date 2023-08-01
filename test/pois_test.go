@@ -28,14 +28,14 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 32, 256, pois.Config{})
+	err = prover.Recovery(key, 1024, 1280, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
 
 	//test recovery chain state
-	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 32, 256)
+	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 1024, 1280)
 	if err != nil {
 		t.Fatal("recovery chain state error", err)
 	}
@@ -59,7 +59,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 1024, 1280)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -122,7 +122,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1025, 1537)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -138,7 +138,7 @@ func TestPois(t *testing.T) {
 
 	//deletion proof
 	ts = time.Now()
-	chProof, Err := prover.ProveDeletion(32)
+	chProof, Err := prover.ProveDeletion(256)
 	var delProof *pois.DeletionProof
 	select {
 	case err = <-Err:

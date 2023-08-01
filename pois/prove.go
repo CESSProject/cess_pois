@@ -776,10 +776,10 @@ func (p *Prover) organizeFiles(num int64) error {
 }
 
 func (p *Prover) deleteFiles(num int64, raw bool) error {
-	for i := int64(1); i <= num; i++ {
+	for i := p.front + 1; i <= p.front+num; i++ {
 		fpath := path.Join(
 			IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (p.front+i-1)/(p.setLen*p.clusterSize)+1),
+			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (i-1)/(p.setLen*p.clusterSize)+1),
 			fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
 			fmt.Sprintf("%s-%d", expanders.FILE_NAME, (i-1)%p.clusterSize+p.Expanders.K),
 		)
@@ -787,6 +787,26 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 			return errors.Wrap(err, "delete file error")
 		}
 	}
+	//organize empty dirs
+	last := (p.front+num-1)/(p.setLen*p.clusterSize) + 1
+	dirs, err := os.ReadDir(IdleFilePath)
+	if err != nil {
+		return errors.Wrap(err, "delete file error")
+	}
+
+	for _, dir := range dirs {
+		slice := strings.Split(dir.Name(), "-")
+		index, err := strconv.Atoi(slice[len(slice)-1])
+		if err != nil {
+			return errors.Wrap(err, "delete file error")
+		}
+		if int64(index) < last {
+			if err = util.DeleteDir(path.Join(IdleFilePath, dir.Name())); err != nil {
+				return errors.Wrap(err, "delete file error")
+			}
+		}
+	}
+
 	if !raw {
 		p.space += num * FileSize
 	} else {
@@ -794,6 +814,24 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 	}
 	return nil
 }
+
+/*
+	fs, err := os.ReadDir(dir)
+	if err != nil {
+		return errors.Wrap(err, "delete element data error")
+	}
+	for _, f := range fs {
+		slice := strings.Split(f.Name(), "-")
+		index, err := strconv.Atoi(slice[len(slice)-1])
+		if err != nil {
+			return errors.Wrap(err, "delete element data error")
+		}
+		if index <= last {
+			util.DeleteFile(path.Join(dir, f.Name()))
+		}
+	}
+
+*/
 
 func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 

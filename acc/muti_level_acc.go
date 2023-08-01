@@ -2,10 +2,11 @@ package acc
 
 import (
 	"bytes"
-	"io/ioutil"
 	"math"
 	"math/big"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -234,10 +235,6 @@ func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "add elements error")
 	}
-	for acc.isDel.Load() || !acc.setUpdate(true) {
-		time.Sleep(time.Second * 2)
-	}
-	defer acc.setUpdate(false)
 	newAcc, err := acc.addElements(elems)
 	if err != nil {
 		return errors.Wrap(err, "add elements error")
@@ -328,12 +325,6 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "delete elements error")
 	}
-	acc.isDel.Store(true)
-	for !acc.setUpdate(true) {
-		time.Sleep(time.Second * 2)
-	}
-	acc.isDel.Store(false)
-	defer acc.setUpdate(false)
 
 	//read data from disk
 	data, err := readAccData(acc.FilePath, index)
@@ -422,6 +413,11 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if index <= int64(acc.Deleted) || index > int64(acc.Deleted+acc.ElemNums) {
 		return nil, errors.New("bad index")
 	}
+	data, err := readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
+	if err != nil {
+		return nil, err
+	}
+	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
 	index -= int64(acc.Deleted)
 	p := acc.Accs
 	var wit *WitnessNode
@@ -443,11 +439,6 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if i < DEFAULT_LEVEL {
 		return nil, errors.New("get witness node error")
 	}
-	data, err := readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
-	if err != nil {
-		return nil, err
-	}
-	idx := int((index - 1) % DEFAULT_ELEMS_NUM)
 	wit = &WitnessNode{
 		Elem: data.Values[idx],
 		Wit:  data.Wits[idx],
@@ -473,7 +464,16 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 			Acc:  &WitnessNode{Elem: acc.Accs.Value},
 		},
 	}
+
 	snapshot := acc.GetSnapshot()
+
+	acc.isDel.Store(true)
+	for !acc.setUpdate(true) {
+		time.Sleep(time.Second * 2)
+	}
+	acc.isDel.Store(false)
+	defer acc.setUpdate(false)
+
 	err := acc.DeleteElements(num)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "proof acc delete error")
@@ -501,15 +501,13 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 // AddElementsAndProof add elements to muti-level acc and create proof of added elements
 func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]byte, error) {
 	snapshot := acc.GetSnapshot()
-	// group := make([][][]byte, 0)
 	exist := &WitnessNode{Elem: snapshot.Accs.Value}
-	// if acc.CurrCount < DEFAULT_ELEMS_NUM &&
-	// 	len(elems)+acc.CurrCount > DEFAULT_ELEMS_NUM {
-	// 	group = append(group, elems[:DEFAULT_ELEMS_NUM-acc.CurrCount])
-	// }
-	// for i := 0; i <= len(elems); {
 
-	// }
+	for acc.isDel.Load() || !acc.setUpdate(true) {
+		time.Sleep(time.Second * 2)
+	}
+	defer acc.setUpdate(false)
+
 	err := acc.AddElements(elems)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "proof acc insert error")
@@ -550,12 +548,16 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	if rear == int64(acc.Deleted) {
 		return nil
 	}
+	fileNum, err := acc.GetRecoveryFileNum()
+	if err != nil {
+		return err
+	}
 	num := (int(rear) - acc.Deleted - 1) / DEFAULT_ELEMS_NUM
+	offset := acc.Deleted % DEFAULT_ELEMS_NUM
 	for i := 0; i <= num; i++ {
 		index := acc.Deleted/DEFAULT_ELEMS_NUM + i
 		backup, err := readBackup(acc.FilePath, index)
-		if err != nil ||
-			len(backup.Values)+acc.Deleted%DEFAULT_ELEMS_NUM != DEFAULT_ELEMS_NUM {
+		if err != nil || len(backup.Values)+offset != DEFAULT_ELEMS_NUM {
 			backup, err = readAccData(acc.FilePath, index)
 			if err != nil {
 				return err
@@ -567,17 +569,13 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			}
 		}
 		node := &AccNode{}
-
-		fileNum, err := acc.GetRecoveryFileNum()
-		if err != nil {
-			return err
-		}
 		if fileNum != rear-int64(acc.Deleted) {
 			left, right := 0, len(backup.Values)
-			if i == 0 && acc.Deleted%DEFAULT_ELEMS_NUM > 0 {
-				left = acc.Deleted % DEFAULT_ELEMS_NUM
+			if i == 0 && offset > 0 &&
+				(len(backup.Values) == DEFAULT_ELEMS_NUM || DEFAULT_ELEMS_NUM-offset < len(backup.Values)) {
+				left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - len(backup.Values)) //sub real file offset
 			}
-			if i == num && (rear-1)%DEFAULT_ELEMS_NUM != 0 {
+			if i == num && rear%DEFAULT_ELEMS_NUM != 0 {
 				right = int((rear-1)%DEFAULT_ELEMS_NUM + 1)
 			}
 			backup.Values = backup.Values[left:right]
@@ -588,19 +586,27 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			backup.Values,
 		)
 		acc.addSubAcc(node)
+		if i == 0 && offset > 0 {
+			acc.CurrCount += acc.Deleted % DEFAULT_ELEMS_NUM
+		}
 	}
 	return nil
 }
 
 func (acc *MutiLevelAcc) GetRecoveryFileNum() (int64, error) {
 	var num int64
-	entrys, err := ioutil.ReadDir(acc.FilePath)
+	entrys, err := os.ReadDir(acc.FilePath)
 	if err != nil {
 		return num, err
 	}
 
 	for i := 0; i < len(entrys); i++ {
-		files, err := readAccData(acc.FilePath, i)
+		name := strings.Split(entrys[i].Name(), "-")[2]
+		index, err := strconv.Atoi(name)
+		if err != nil {
+			return num, err
+		}
+		files, err := readAccData(acc.FilePath, index)
 		if err != nil {
 			return num, err
 		}
