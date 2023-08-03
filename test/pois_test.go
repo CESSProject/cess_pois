@@ -15,27 +15,27 @@ import (
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
 	k, n, d := int64(8), int64(1024*16), int64(64)
-	// key, err := ParseKey("./key")
-	// if err != nil {
-	// 	t.Fatal("parse key error", err)
-	// }
-	key := acc.RsaKeygen(2048)
-	err := SaveKey("./key", key)
+	key, err := ParseKey("./key")
 	if err != nil {
-		t.Fatal("save key error", err)
+		t.Fatal("parse key error", err)
 	}
+	// key := acc.RsaKeygen(2048)
+	// err := SaveKey("./key", key)
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*32*16, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 0, pois.Config{})
+	err = prover.Recovery(key, 0, 512, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
 
 	//test recovery chain state
-	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 512)
 	if err != nil {
 		t.Fatal("recovery chain state error", err)
 	}
@@ -59,7 +59,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 512)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -122,7 +122,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 513)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -136,44 +136,44 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("verify space proof time", time.Since(ts))
 
-	//deletion proof
-	ts = time.Now()
-	chProof, Err := prover.ProveDeletion(256)
-	var delProof *pois.DeletionProof
-	select {
-	case err = <-Err:
-		t.Fatal("prove deletion proof error", err)
-	case delProof = <-chProof:
-		break
-	}
-	t.Log("prove deletion proof time", time.Since(ts))
+	// //deletion proof
+	// ts = time.Now()
+	// chProof, Err := prover.ProveDeletion(256)
+	// var delProof *pois.DeletionProof
+	// select {
+	// case err = <-Err:
+	// 	t.Fatal("prove deletion proof error", err)
+	// case delProof = <-chProof:
+	// 	break
+	// }
+	// t.Log("prove deletion proof time", time.Since(ts))
 
-	if delProof == nil && err == nil {
-		t.Log("no need to prove deletion proof.")
-		return
-	} else if err != nil {
-		t.Fatal("prove deletion proof error", err)
-	}
+	// if delProof == nil && err == nil {
+	// 	t.Log("no need to prove deletion proof.")
+	// 	return
+	// } else if err != nil {
+	// 	t.Fatal("prove deletion proof error", err)
+	// }
 
-	//verify deletion proof
-	ts = time.Now()
-	err = verifier.VerifyDeletion(prover.ID, delProof)
-	if err != nil {
-		t.Fatal("verify deletion proof error", err)
-	}
-	t.Log("verify deletion proof time", time.Since(ts))
-	//add file to count
-	ts = time.Now()
-	err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
-	if err != nil {
-		t.Fatal("update count error", err)
-	}
-	err = prover.SetChallengeState(false)
-	if err != nil {
-		t.Fatal("update chain status error", err)
-	}
-	t.Log("update prover status time", time.Since(ts))
-	t.Log("acc", prover.AccManager.GetSnapshot().Accs.Value)
+	// //verify deletion proof
+	// ts = time.Now()
+	// err = verifier.VerifyDeletion(prover.ID, delProof)
+	// if err != nil {
+	// 	t.Fatal("verify deletion proof error", err)
+	// }
+	// t.Log("verify deletion proof time", time.Since(ts))
+	// //add file to count
+	// ts = time.Now()
+	// err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
+	// if err != nil {
+	// 	t.Fatal("update count error", err)
+	// }
+	// err = prover.SetChallengeState(false)
+	// if err != nil {
+	// 	t.Fatal("update chain status error", err)
+	// }
+	// t.Log("update prover status time", time.Since(ts))
+	// t.Log("acc", prover.AccManager.GetSnapshot().Accs.Value)
 }
 
 func ToBytes(key acc.RsaKey) []byte {

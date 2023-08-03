@@ -354,6 +354,10 @@ func (p *Prover) GetFront() int64 {
 	return p.front
 }
 
+func (p *Prover) GetNumOfFileInSet() int64 {
+	return p.setLen * p.clusterSize
+}
+
 func (p *Prover) CommitDataIsReady() bool {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
@@ -869,24 +873,6 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 	return nil
 }
 
-/*
-	fs, err := os.ReadDir(dir)
-	if err != nil {
-		return errors.Wrap(err, "delete element data error")
-	}
-	for _, f := range fs {
-		slice := strings.Split(f.Name(), "-")
-		index, err := strconv.Atoi(slice[len(slice)-1])
-		if err != nil {
-			return errors.Wrap(err, "delete element data error")
-		}
-		if index <= last {
-			util.DeleteFile(path.Join(dir, f.Name()))
-		}
-	}
-
-*/
-
 func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 
 	count := int64(0)
@@ -935,7 +921,7 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 				size += file.Size()
 			}
 			if size == fileTotalSize {
-				count++
+				count += p.clusterSize
 			}
 		}
 	}
