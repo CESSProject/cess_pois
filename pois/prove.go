@@ -26,6 +26,7 @@ var (
 	AccBackupPath  string = "./chain-state-backup"
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 4 //please set according to the number of cores
+	SpaceFullError        = errors.New("generate idle file set error: not enough space")
 )
 
 type Prover struct {
@@ -200,18 +201,19 @@ func (p *Prover) RecoveryChainState(key acc.RsaKey, accSnp []byte, front, rear i
 	return nil
 }
 
-// GenerateIdleFileSet generate num idle files, num must be consistent with the data given by CESS, otherwise it cannot pass the verification
+// GenerateIdleFileSet generate num=(p.setLen*p.clusterSize(==k)) idle files, num must be consistent with the data given by CESS, otherwise it cannot pass the verification
+// This method is not thread-safe, please do not use it concurrently!
 func (p *Prover) GenerateIdleFileSet() error {
 	fileNum := p.setLen * p.clusterSize
 	if p.space < (fileNum+p.setLen*p.Expanders.K)*FileSize {
-		return errors.New("generate idle file set error: bad element number")
+		return SpaceFullError
 	}
 	if !p.generate.CompareAndSwap(false, true) {
 		return errors.New("generate idle file set error: lock is occupied")
 	}
+	defer p.generate.Store(false)
 	p.added += fileNum
 	p.space -= (fileNum + p.setLen*p.Expanders.K) * FileSize
-	p.generate.Store(false)
 	start := (p.added-fileNum)/p.clusterSize + 1
 	if err := p.Expanders.GenerateIdleFileSet(
 		p.ID, start, p.setLen, IdleFilePath); err != nil {
@@ -220,6 +222,47 @@ func (p *Prover) GenerateIdleFileSet() error {
 		return errors.Wrap(err, "generate idle file set error")
 	}
 	p.generated += fileNum
+	return nil
+}
+
+func (p *Prover) GenerateIdleFileSets(tNum int) error {
+
+	if tNum <= 0 {
+		return errors.New("generate idle file sets error bad thread number")
+	}
+
+	fileNum := p.setLen * p.clusterSize
+	if p.space < (fileNum+p.setLen*p.Expanders.K)*FileSize*int64(tNum) {
+		return SpaceFullError
+	}
+	if !p.generate.CompareAndSwap(false, true) {
+		return errors.New("generate idle file sets error lock is occupied")
+	}
+	defer p.generate.Store(false)
+
+	currIndex := p.added/p.clusterSize + 1
+	p.added += fileNum * int64(tNum)
+	p.space -= (fileNum + p.setLen*p.Expanders.K) * FileSize * int64(tNum)
+
+	var err error
+	wg := sync.WaitGroup{}
+	wg.Add(tNum)
+	for i := 0; i < tNum; i++ {
+		start := currIndex + int64(i)*p.setLen
+		ants.Submit(func() {
+			defer wg.Done()
+			if tErr := p.Expanders.GenerateIdleFileSet(
+				p.ID, start, p.setLen, IdleFilePath); tErr != nil {
+				err = tErr
+			}
+		})
+	}
+	wg.Wait()
+	if err != nil {
+		p.space += (fileNum + p.setLen*p.Expanders.K) * FileSize * int64(tNum)
+		return errors.Wrap(err, "generate idle file sets error")
+	}
+	p.generated += fileNum * int64(tNum)
 	return nil
 }
 
@@ -239,8 +282,11 @@ func (p *Prover) AccRollback(isDel bool) bool {
 		if !p.delete.CompareAndSwap(true, false) {
 			return false
 		}
-	} else if !p.update.CompareAndSwap(true, false) {
-		return false
+	} else {
+		if !p.update.CompareAndSwap(true, false) {
+			return false
+		}
+		p.commited -= p.setLen * p.clusterSize
 	}
 	return p.AccManager.RollBack()
 }
@@ -306,6 +352,14 @@ func (p *Prover) GetFront() int64 {
 	p.rw.RLock()
 	defer p.rw.RUnlock()
 	return p.front
+}
+
+func (p *Prover) CommitDataIsReady() bool {
+	p.rw.RLock()
+	defer p.rw.RUnlock()
+	fileNum := p.generated
+	commited := p.commited
+	return fileNum-commited > p.setLen*p.clusterSize
 }
 
 func (p *Prover) GetChainState() ChainState {

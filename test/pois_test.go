@@ -15,27 +15,27 @@ import (
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
 	k, n, d := int64(8), int64(1024*16), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("parse key error", err)
-	}
-	// key := acc.RsaKeygen(2048)
-	// err := SaveKey("./key", key)
+	// key, err := ParseKey("./key")
 	// if err != nil {
-	// 	t.Fatal("save key error", err)
+	// 	t.Fatal("parse key error", err)
 	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 64*32*16, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 1024, 1280, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
 
 	//test recovery chain state
-	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 1024, 1280)
+	err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 	if err != nil {
 		t.Fatal("recovery chain state error", err)
 	}
@@ -43,7 +43,7 @@ func TestPois(t *testing.T) {
 	verifier := pois.NewVerifier(k, n, d)
 
 	ts := time.Now()
-	err = prover.GenerateIdleFileSet()
+	err = prover.GenerateIdleFileSets(4)
 	if err != nil {
 		t.Fatal("generate idle file set error", err)
 	}
@@ -59,7 +59,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 1024, 1280)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -122,7 +122,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1025, 1537)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
