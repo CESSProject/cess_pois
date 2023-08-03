@@ -2,14 +2,14 @@ package expanders
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
-	"encoding/json"
+	"hash"
 	"sync"
-
-	"github.com/CESSProject/cess_pois/util"
-
-	"github.com/pkg/errors"
 )
+
+const DEFAULT_HASH_SIZE = 64
 
 type NodeType int32
 
@@ -26,34 +26,19 @@ type Node struct {
 	Parents []NodeType `json:"parents"`
 }
 
-func (expanders *Expanders) MarshalAndSave(path string) error {
-	data, err := json.Marshal(expanders)
-	if err != nil {
-		return errors.Wrap(err, "marshal and save expanders error")
-	}
-	err = util.SaveFile(path, data)
-	return errors.Wrap(err, "marshal and save expanders error")
-}
-
-func ReadAndUnmarshalExpanders(path string) (*Expanders, error) {
-	data, err := util.ReadFile(path)
-	if err != nil {
-		return nil, errors.Wrap(err, "read and unmarshal expanders error")
-	}
-	expander := new(Expanders)
-	err = json.Unmarshal(data, expander)
-	return expander, errors.Wrap(err, "read and unmarshal expanders error")
-}
-
-func NewExpanders(k, n, d int64) *Expanders {
+func NewExpanders(k, n, d, hashSize int64) *Expanders {
 	expanders := &Expanders{
 		Size: (k + 1) * n,
 		K:    k, N: n, D: d,
-		HashSize: 64,
+		HashSize: hashSize,
 	}
+	if hashSize <= 0 {
+		expanders.HashSize = DEFAULT_HASH_SIZE
+	}
+
 	expanders.FilePool = &sync.Pool{
 		New: func() any {
-			buf := make([]byte, n*int64(HashSize))
+			buf := make([]byte, n*expanders.HashSize)
 			return &buf
 		},
 	}
@@ -122,6 +107,26 @@ func (node *Node) ParentInList(parent NodeType) (int, bool) {
 		i++
 	}
 	return i, false
+}
+
+func (expanders Expanders) NewHash() hash.Hash {
+	switch expanders.HashSize {
+	case 32:
+		return sha256.New()
+	case 64:
+		return sha512.New()
+	default:
+		return sha512.New()
+	}
+}
+
+func (expanders Expanders) GetHash(data []byte) []byte {
+	h := expanders.NewHash()
+	if data == nil {
+		data = []byte("none")
+	}
+	h.Write(data)
+	return h.Sum(nil)
 }
 
 func GetBytes(v any) []byte {

@@ -44,12 +44,12 @@ type Verifier struct {
 
 func NewVerifier(k, n, d int64) *Verifier {
 	verifier = &Verifier{
-		Expanders: *expanders.NewExpanders(k, n, d),
+		Expanders: *expanders.NewExpanders(k, n, d, expanders.DEFAULT_HASH_SIZE),
 		Nodes:     make(map[string]*ProverNode),
 	}
 	SpaceChals = k
 	ClusterSize = k
-	tree.InitMhtPool(int(n), expanders.HashSize)
+	tree.InitMhtPool(int(n), int(verifier.Expanders.HashSize))
 	return verifier
 }
 
@@ -107,7 +107,7 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 	} else if !bytes.Equal(pNode.ID, ID) {
 		return false
 	}
-	hash := expanders.NewHash()
+	hash := v.Expanders.NewHash()
 	for i := 0; i < len(commits.FileIndexs); i++ {
 		if commits.FileIndexs[i] <= pNode.Rear { //
 			return false
@@ -213,7 +213,7 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 	}
 
 	frontSize := int(unsafe.Sizeof(expanders.NodeType(0))) + len(ID) + 8 + 8
-	hashSize := expanders.HashSize
+	hashSize := int(v.Expanders.HashSize)
 	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize+int(IdleSetLen)*hashSize)
 	zero := make([]byte, int(v.Expanders.D+1)*hashSize+int(IdleSetLen)*hashSize)
 
@@ -298,9 +298,9 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 			}
 
 			if (chals[i][0]-1)%IdleSetLen > 0 {
-				hash = expanders.GetHash(append(label, pNode.CommitsBuf.Roots[layer*IdleSetLen+(chals[i][0]-1)%IdleSetLen-1]...))
+				hash = v.Expanders.GetHash(append(label, pNode.CommitsBuf.Roots[layer*IdleSetLen+(chals[i][0]-1)%IdleSetLen-1]...))
 			} else {
-				hash = expanders.GetHash(label)
+				hash = v.Expanders.GetHash(label)
 			}
 			if !bytes.Equal(hash, proofs[i][j-1].Node.Label) {
 				err := errors.New("verify label error")
@@ -362,7 +362,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify acc proofs error")
 	}
-	label := make([]byte, len(ID)+8+expanders.HashSize)
+	label := make([]byte, len(ID)+8+int(v.Expanders.HashSize))
 	for i := int64(0); i < int64(len(chals)); i++ {
 		for j := int64(0); j < ClusterSize; j++ {
 			if proof.Indexs[i*ClusterSize+j] != (chals[i][0]-1)*ClusterSize+j+1 ||
@@ -372,7 +372,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 			}
 			util.CopyData(label, ID, expanders.GetBytes((chals[i][0]-1)*ClusterSize+j+1),
 				pNode.CommitsBuf.Roots[(v.Expanders.K+j)*IdleSetLen+i])
-			if !bytes.Equal(expanders.GetHash(label), proof.Labels[i*ClusterSize+j]) {
+			if !bytes.Equal(v.Expanders.GetHash(label), proof.Labels[i*ClusterSize+j]) {
 				err := errors.New("verify file label error")
 				return errors.Wrap(err, "verify acc proofs error")
 			}
@@ -394,7 +394,7 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify space proofs error")
 	}
-	label := make([]byte, len(pNode.ID)+8+expanders.HashSize)
+	label := make([]byte, len(pNode.ID)+8+int(v.Expanders.HashSize))
 
 	for i := 0; i < len(proof.Roots); i++ {
 
@@ -420,7 +420,7 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 		}
 
 		util.CopyData(label, pNode.ID, expanders.GetBytes(proof.Left+int64(i)), proof.Roots[i])
-		if !bytes.Equal(expanders.GetHash(label), proof.WitChains[i].Elem) {
+		if !bytes.Equal(v.Expanders.GetHash(label), proof.WitChains[i].Elem) {
 			err := errors.New("verify file label error")
 			return errors.Wrap(err, "verify space proofs error")
 		}
@@ -447,10 +447,10 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 	}
 	labels := make([][]byte, lens)
 	for i := 0; i < lens; i++ {
-		label := make([]byte, len(ID)+8+expanders.HashSize)
+		label := make([]byte, len(ID)+8+int(v.Expanders.HashSize))
 		util.CopyData(label, ID,
 			expanders.GetBytes(pNode.Front+int64(i)+1), proof.Roots[i])
-		labels[i] = expanders.GetHash(label)
+		labels[i] = v.Expanders.GetHash(label)
 	}
 	if !acc.VerifyDeleteUpdate(pNode.Key, proof.WitChain,
 		labels, proof.AccPath, pNode.Acc) {

@@ -65,7 +65,3 @@ func Hprime(u big.Int) big.Int {
 	//return big.NewInt(-1)
 
 }
-
-// func Hprime(u big.Int) big.Int {
-// 	return u
-// }

@@ -5,8 +5,6 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,18 +61,19 @@ type MutiLevelAcc struct {
 	Accs      *AccNode
 	Key       RsaKey
 	ElemNums  int
-	Deleted   int
+	Deleted   int // Deleted field always points to the next element to be deleted
 	CurrCount int
 	Curr      *AccNode
 	Parent    *AccNode
 	rw        *sync.RWMutex
-	isUpdate  bool
-	stable    bool
-	isDel     *atomic.Bool
+	isUpdate  bool         //whether to update the muti-acc
+	stable    bool         // whether the accumulator is in steady state
+	isDel     *atomic.Bool //is the element being removed now
 	snapshot  *MutiLevelAcc
 	FilePath  string
 }
 
+// Recovery function be used to recovery muti-acc when a storage node goes down unexpectedly
 func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) {
 	if accPath == "" {
 		accPath = DEFAULT_PATH
@@ -95,7 +94,7 @@ func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) 
 		FilePath: accPath,
 		stable:   true,
 		isDel:    new(atomic.Bool),
-		Deleted:  int(front),
+		Deleted:  int(front), //front refers to the number of elements that have been deleted
 	}
 	if err := _AccManager.constructMutiAcc(rear); err != nil {
 		return nil, errors.Wrap(err, "recovery muti-acc error")
@@ -103,6 +102,7 @@ func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) 
 	return _AccManager, nil
 }
 
+// NewMutiLevelAcc function be used to create a globally unique acc handle
 func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
 	if path == "" {
 		path = DEFAULT_PATH
@@ -131,6 +131,8 @@ func GetAccHandle() AccHandle {
 	return _AccManager
 }
 
+// GetSnapshot be used to get muti-acc's snapshot, if it is nil, will create a new snapshot and return.
+// muti-acc's snapshot is a backup of current state of muti-acc,snapshot is not null unless muti-acc has never updated.
 func (acc *MutiLevelAcc) GetSnapshot() *MutiLevelAcc {
 	acc.rw.RLock()
 	defer acc.rw.RUnlock()
@@ -140,6 +142,9 @@ func (acc *MutiLevelAcc) GetSnapshot() *MutiLevelAcc {
 	return acc.snapshot
 }
 
+// UpdateSnapshot recreate the snapshot, and set the acc to steady state.
+// This method needs to be called to solidify the update every time an muti-acc update is completed, and then it cannot be rolled back.
+// Snapshot cannot be updated if the current muti-acc update is not complete. Method will return the update result of snapshot.
 func (acc *MutiLevelAcc) UpdateSnapshot() bool {
 	acc.rw.Lock()
 	defer acc.rw.Unlock()
@@ -154,6 +159,8 @@ func (acc *MutiLevelAcc) UpdateSnapshot() bool {
 	return true
 }
 
+// RollBack be used to roll back muti-acc state when insert or delete elements error/fail.
+// Rollback requires the support of snapshots, so when the snapshot is empty, the rollback will fail
 func (acc *MutiLevelAcc) RollBack() bool {
 	acc.rw.Lock()
 	defer acc.rw.Unlock()
@@ -188,6 +195,22 @@ func (acc *MutiLevelAcc) copy(other *MutiLevelAcc) {
 	acc.FilePath = other.FilePath
 }
 
+func copyAccNode(src *AccNode, target *AccNode) {
+	if src == nil || target == nil {
+		return
+	}
+	target.Value = make([]byte, len(src.Value))
+	copy(target.Value, src.Value)
+	target.Children = make([]*AccNode, len(src.Children))
+	target.Len = src.Len
+	target.Wit = make([]byte, len(src.Wit))
+	copy(target.Wit, src.Wit)
+	for i := 0; i < len(src.Children); i++ {
+		target.Children[i] = &AccNode{}
+		copyAccNode(src.Children[i], target.Children[i])
+	}
+}
+
 func (acc *MutiLevelAcc) createSnapshot() {
 	acc.snapshot = &MutiLevelAcc{}
 	acc.snapshot.copy(acc)
@@ -211,6 +234,7 @@ func (acc *MutiLevelAcc) setUpdate(yes bool) bool {
 	return true
 }
 
+// updateAcc update one sub acc and its elements' witness
 func (acc *MutiLevelAcc) updateAcc(node *AccNode) {
 	if node == nil {
 		return
@@ -227,9 +251,12 @@ func (acc *MutiLevelAcc) updateAcc(node *AccNode) {
 	node.Value = generateAcc(acc.Key, last.Wit, [][]byte{last.Value})
 }
 
+// AddElements add elements to sub-acc and update muti-acc.
 func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
+
 	lens := len(elems)
-	//the range of length of elems be insert is [0,1024]
+	// the range of length of elems be insert is (0,DEFAULT_ELEMS_NUM],
+	// one insertion cannot exceed the range of one sub acc
 	if lens <= 0 || acc.CurrCount < DEFAULT_ELEMS_NUM &&
 		lens+acc.CurrCount > DEFAULT_ELEMS_NUM {
 		err := errors.New("illegal number of elements")
@@ -243,6 +270,7 @@ func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
 	return nil
 }
 
+// addElements add elements to sub acc and seve elements' value and witness.
 func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 	var (
 		data *AccData
@@ -250,7 +278,7 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 	)
 	node := &AccNode{}
 	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
-		index := (acc.Deleted + acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
+		index := (acc.Deleted + acc.ElemNums - 1) / DEFAULT_ELEMS_NUM //element label indexing starts from zero,the file index also starts from 0
 		data, err = readAccData(acc.FilePath, index)
 		if err != nil {
 			return nil, errors.Wrap(err, "add elements to sub acc error")
@@ -266,14 +294,14 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 		acc.Key, data.Wits[node.Len-1],
 		[][]byte{data.Values[node.Len-1]},
 	)
-	index := ((acc.Deleted + acc.ElemNums + len(elems)) - 1) / DEFAULT_ELEMS_NUM
+	index := ((acc.Deleted + acc.ElemNums + len(elems)) - 1) / DEFAULT_ELEMS_NUM //save to original file or new file(index +1)
 	err = saveAccData(acc.FilePath, index, data.Values, data.Wits)
 	return node, errors.Wrap(err, "add elements to sub acc error")
 }
 
 // addSubAccs inserts the sub acc built with new elements into the multilevel accumulator
 func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
-	//acc.CurrCount will be equal to zero when the accumulator is empty
+	//acc.CurrCount will be equal to zero when the accumulator is empty,otherwise it will just be greater than 0.
 	if acc.CurrCount == 0 {
 		acc.Curr = subAcc
 		acc.CurrCount = acc.Curr.Len
@@ -294,13 +322,13 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 	}
 	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
 	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
-		acc.ElemNums += subAcc.Len - acc.CurrCount
+		acc.ElemNums += subAcc.Len - acc.CurrCount //sub acc container old elements and new elements
 		lens := len(acc.Parent.Children)
-		acc.Parent.Children[lens-1] = subAcc
-	} else if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
+		acc.Parent.Children[lens-1] = subAcc //directly replace the old sub acc
+	} else if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM { //if it is new sub acc and the parent acc is not full, insert the sub acc directly into it.
 		acc.ElemNums += subAcc.Len
 		acc.Parent.Children = append(acc.Parent.Children, subAcc)
-	} else {
+	} else { //insert sub acc to new parent acc and insert parent acc to top acc.
 		acc.ElemNums += subAcc.Len
 		node := &AccNode{
 			Wit:      acc.Key.G.Bytes(),
@@ -317,10 +345,11 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 	acc.updateAcc(acc.Accs)
 }
 
+// DeleteElements delete elements from head sub acc and update the muti-acc.
 func (acc *MutiLevelAcc) DeleteElements(num int) error {
 
-	index := acc.Deleted / DEFAULT_ELEMS_NUM
-	offset := acc.Deleted % DEFAULT_ELEMS_NUM
+	index := acc.Deleted / DEFAULT_ELEMS_NUM  //the file index of the next element to be deleted
+	offset := acc.Deleted % DEFAULT_ELEMS_NUM //the number of deleted elements under the current sub acc
 	if num <= 0 || num > acc.ElemNums || num+offset > DEFAULT_ELEMS_NUM {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "delete elements error")
@@ -337,8 +366,8 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 		return errors.Wrap(err, "delet elements error")
 	}
 
-	//delete elements from acc and update acc
-	if num < len(data.Values) {
+	//delete elements from sub acc and update muti-acc
+	if num < len(data.Values) { //
 		data.Values = data.Values[num:]
 		data.Wits = generateWitness(acc.Key.G, acc.Key.N, data.Values)
 		err = saveAccData(acc.FilePath, index, data.Values, data.Wits)
@@ -356,7 +385,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 			return errors.Wrap(err, "delet elements error")
 		}
 
-		//update mid-level acc
+		//update parent acc
 		acc.Accs.Children[0].Children = acc.Accs.Children[0].Children[1:]
 		acc.Accs.Children[0].Len -= 1
 		if acc.Accs.Children[0].Len == 0 && acc.Accs.Len >= 1 {
@@ -364,7 +393,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 			acc.Accs.Len -= 1
 		}
 
-		//update top-level acc
+		//update top acc
 		if acc.Accs.Len == 0 {
 			acc.Parent = nil
 			acc.Curr = nil
@@ -380,22 +409,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 	return nil
 }
 
-func copyAccNode(src *AccNode, target *AccNode) {
-	if src == nil || target == nil {
-		return
-	}
-	target.Value = make([]byte, len(src.Value))
-	copy(target.Value, src.Value)
-	target.Children = make([]*AccNode, len(src.Children))
-	target.Len = src.Len
-	target.Wit = make([]byte, len(src.Wit))
-	copy(target.Wit, src.Wit)
-	for i := 0; i < len(src.Children); i++ {
-		target.Children[i] = &AccNode{}
-		copyAccNode(src.Children[i], target.Children[i])
-	}
-}
-
+// GetWitnessChains be used to get elements witness from sub acc to top acc (called witness chain)
 func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error) {
 	var err error
 	snapshot := acc.GetSnapshot()
@@ -409,6 +423,7 @@ func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error
 	return chains, nil
 }
 
+// getWitnessChain get one element witness chain.
 func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if index <= int64(acc.Deleted) || index > int64(acc.Deleted+acc.ElemNums) {
 		return nil, errors.New("bad index")
@@ -417,7 +432,7 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
+	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM //calc label index in acc file
 	index -= int64(acc.Deleted)
 	p := acc.Accs
 	var wit *WitnessNode
@@ -429,15 +444,12 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 			Acc:  wit,
 		}
 		size := int64(math.Pow(DEFAULT_ELEMS_NUM, float64(DEFAULT_LEVEL-i-1)))
-		idx := (index - 1) / size
-		idx = idx % size
-		if len(p.Children) < int(idx+1) || p.Children == nil {
+		idx := (index - 1) / size //get the position of the element in upper acc
+		idx = idx % DEFAULT_ELEMS_NUM
+		if len(p.Children) < int(idx+1) || p.Children == nil { //wrong acc or index data
 			continue
 		}
 		p = p.Children[idx]
-	}
-	if i < DEFAULT_LEVEL {
-		return nil, errors.New("get witness node error")
 	}
 	wit = &WitnessNode{
 		Elem: data.Values[idx],
@@ -543,39 +555,42 @@ func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]
 	return exist, accs, nil
 }
 
+// constructMutiAcc be used to restore muti-acc from sub-acc files
 func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	//acc is empty
 	if rear == int64(acc.Deleted) {
 		return nil
 	}
-	fileNum, err := acc.GetRecoveryFileNum()
+	fileNum, err := GetRecoveryFileNum(acc.FilePath) //get accumulator tag number for all logged files
 	if err != nil {
 		return err
 	}
-	num := (int(rear) - acc.Deleted - 1) / DEFAULT_ELEMS_NUM
-	offset := acc.Deleted % DEFAULT_ELEMS_NUM
+	num := (int(rear) - acc.Deleted - 1) / DEFAULT_ELEMS_NUM //number of underlying accumulators,the "-1" operation is to correspond to the accumulator element index[0,N)
+	offset := acc.Deleted % DEFAULT_ELEMS_NUM                //the relative position of the element to be deleted as an offset
 	for i := 0; i <= num; i++ {
-		index := acc.Deleted/DEFAULT_ELEMS_NUM + i
-		backup, err := readBackup(acc.FilePath, index)
+		index := acc.Deleted/DEFAULT_ELEMS_NUM + i     //sub-acc file index
+		backup, err := readBackup(acc.FilePath, index) //read sub-acc file backup
+
+		//if the backup does not exist or is inconsistent with the actual, it means that the program crashed after the accumulator was updated and stabilized
 		if err != nil || len(backup.Values)+offset != DEFAULT_ELEMS_NUM {
-			backup, err = readAccData(acc.FilePath, index)
+			backup, err = readAccData(acc.FilePath, index) //so the correct set of elements is recorded in the sub-acc file
 			if err != nil {
 				return err
 			}
-		} else {
+		} else { //if the program crashes before the accumulator update is complete, the backup file needs to be restored to the sub-acc file
 			err = recoveryAccData(acc.FilePath, index)
 			if err != nil {
 				return err
 			}
-		}
+		} //backup file records the state of the accumulator before it is updated. If the accumulator is down before the update is completed, the update will be invalid
 		node := &AccNode{}
-		if fileNum != rear-int64(acc.Deleted) {
+		if fileNum != rear-int64(acc.Deleted) { //
 			left, right := 0, len(backup.Values)
-			if i == 0 && offset > 0 &&
+			if i == 0 && offset > 0 && //The recorded value is inconsistent with the value to be restored and needs to be normalized
 				(len(backup.Values) == DEFAULT_ELEMS_NUM || DEFAULT_ELEMS_NUM-offset < len(backup.Values)) {
 				left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - len(backup.Values)) //sub real file offset
 			}
-			if i == num && rear%DEFAULT_ELEMS_NUM != 0 {
+			if i == num && rear%DEFAULT_ELEMS_NUM != 0 { //when the recovery is consistent with the record, right=len(backup.Values), otherwise the rear will prevail
 				right = int((rear-1)%DEFAULT_ELEMS_NUM + 1)
 			}
 			backup.Values = backup.Values[left:right]
@@ -586,34 +601,11 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			backup.Values,
 		)
 		acc.addSubAcc(node)
-		if i == 0 && offset > 0 {
+		if i == 0 && offset > 0 { //Restore the deleted state,consistent with before recovery
 			acc.CurrCount += acc.Deleted % DEFAULT_ELEMS_NUM
 		}
 	}
 	return nil
-}
-
-func (acc *MutiLevelAcc) GetRecoveryFileNum() (int64, error) {
-	var num int64
-	entrys, err := os.ReadDir(acc.FilePath)
-	if err != nil {
-		return num, err
-	}
-
-	for i := 0; i < len(entrys); i++ {
-		name := strings.Split(entrys[i].Name(), "-")[2]
-		index, err := strconv.Atoi(name)
-		if err != nil {
-			return num, err
-		}
-		files, err := readAccData(acc.FilePath, index)
-		if err != nil {
-			return num, err
-		}
-		num += int64(len(files.Values))
-	}
-
-	return num, nil
 }
 
 // Accumulator validation interface

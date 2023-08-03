@@ -1,10 +1,7 @@
 package expanders
 
 import (
-	"crypto/sha256"
-	"crypto/sha512"
 	"fmt"
-	"hash"
 	"os"
 	"path"
 	"unsafe"
@@ -23,10 +20,6 @@ const (
 	SET_DIR_NAME            = "idle-files"
 )
 
-var (
-	HashSize = 64
-)
-
 func MakeProofDir(dir string) error {
 	if _, err := os.Stat(dir); err != nil {
 		return os.MkdirAll(dir, 0777)
@@ -35,26 +28,6 @@ func MakeProofDir(dir string) error {
 		return err
 	}
 	return os.MkdirAll(dir, 0777)
-}
-
-func NewHash() hash.Hash {
-	switch HashSize {
-	case 32:
-		return sha256.New()
-	case 64:
-		return sha512.New()
-	default:
-		return sha512.New()
-	}
-}
-
-func GetHash(data []byte) []byte {
-	h := NewHash()
-	if data == nil {
-		data = []byte("none")
-	}
-	h.Write(data)
-	return h.Sum(nil)
 }
 
 func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int64, rootDir string) error {
@@ -98,10 +71,11 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	}()
 
 	//calc node labels
-	hash := NewHash()
-	frontSize := len(minerID) + int(unsafe.Sizeof(NodeType(0))) + 8 + 8
-	label := make([]byte, frontSize+int(size)*HashSize+int(expanders.D+1)*HashSize)
-	zero := make([]byte, int(size)*HashSize+int(expanders.D+1)*HashSize)
+	hash := expanders.NewHash()
+	hashSize := expanders.HashSize
+	frontSize := int64(len(minerID) + int(unsafe.Sizeof(NodeType(0))) + 8 + 8)
+	label := make([]byte, frontSize+size*hashSize+(expanders.D+1)*hashSize)
+	zero := make([]byte, size*hashSize+(expanders.D+1)*hashSize)
 	util.CopyData(label, minerID)
 
 	for i := int64(0); i < expanders.K+fileNum; i++ {
@@ -132,13 +106,13 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 					bcount := frontSize
 					for _, p := range node.Parents {
 						idx := int64(p) % expanders.N
-						l, r := idx*int64(HashSize), (idx+1)*int64(HashSize)
+						l, r := idx*hashSize, (idx+1)*hashSize
 						if int64(p) < logicalLayer*expanders.N {
-							copy(label[bcount:bcount+HashSize], (*parents)[l:r])
+							copy(label[bcount:bcount+hashSize], (*parents)[l:r])
 						} else {
-							copy(label[bcount:bcount+HashSize], (*labels)[l:r])
+							copy(label[bcount:bcount+hashSize], (*labels)[l:r])
 						}
-						bcount += HashSize
+						bcount += hashSize
 					}
 					//add files relationship
 					util.CopyData(label[bcount:], roots[(i-1)*size:i*size]...)
@@ -152,11 +126,11 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 				} else {
 					hash.Write(label)
 				}
-				copy((*labels)[k*int64(HashSize):(k+1)*int64(HashSize)], hash.Sum(nil))
+				copy((*labels)[k*hashSize:(k+1)*hashSize], hash.Sum(nil))
 			}
 			//calc merkel tree root hash
-			ltree := tree.CalcLightMhtWithBytes((*labels), HashSize, true)
-			roots[i*size+j] = ltree.GetRoot(HashSize)
+			ltree := tree.CalcLightMhtWithBytes((*labels), int(hashSize), true)
+			roots[i*size+j] = ltree.GetRoot(int(hashSize))
 			tree.RecycleMht(ltree)
 			//save one layer labels of one file
 			if err := util.SaveFile(path.Join(

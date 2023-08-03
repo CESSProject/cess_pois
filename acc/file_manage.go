@@ -98,3 +98,27 @@ func recoveryAccData(dir string, index int) error {
 	err := os.Rename(backup, fpath)
 	return errors.Wrap(err, "recovery element data error")
 }
+
+func GetRecoveryFileNum(dpath string) (int64, error) {
+	var num int64
+	entrys, err := os.ReadDir(dpath)
+	if err != nil {
+		return num, err
+	}
+
+	for i := 0; i < len(entrys); i++ {
+		splitNames := strings.Split(entrys[i].Name(), "-")
+		name := splitNames[len(splitNames)-1]
+		index, err := strconv.Atoi(name)
+		if err != nil {
+			return num, err
+		}
+		files, err := readAccData(dpath, index)
+		if err != nil {
+			return num, err
+		}
+		num += int64(len(files.Values))
+	}
+
+	return num, nil
+}
