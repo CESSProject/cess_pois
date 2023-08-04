@@ -28,8 +28,8 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 0, pois.Config{})
-	//err = prover.Init(key, pois.Config{})
+	//err = prover.Recovery(key, 0, 0, pois.Config{})
+	err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
@@ -137,7 +137,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("verify space proof error", err)
 	}
 	t.Log("verify space proof time", time.Since(ts))
-
+	prover.RestChallengeState()
 	//deletion proof
 	ts = time.Now()
 	chProof, Err := prover.ProveDeletion(256)

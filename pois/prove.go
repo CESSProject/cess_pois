@@ -63,6 +63,7 @@ type context struct {
 type ChainState struct {
 	Acc         acc.AccHandle
 	challenging bool
+	delCh       chan struct{}
 	Rear        int64
 	Front       int64
 }
@@ -298,8 +299,6 @@ func (p *Prover) AccRollback(isDel bool) bool {
 // the update of the accumulator is serial and blocking, you need to update or roll back in time.
 func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 	var err error
-	p.rw.Lock()
-	defer p.rw.Unlock()
 	if num < 0 {
 		err = errors.New("bad files number")
 		return errors.Wrap(err, "updat prover status error")
@@ -310,15 +309,15 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			err = errors.New("no delete task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		if p.proofed > 0 && p.proofed < p.front+num {
-			err = errors.New("proving space proofs is not complete")
-			return errors.Wrap(err, "updat prover status error")
+		for p.chainState.challenging && p.proofed < p.front+num {
+			p.chainState.delCh <- struct{}{}
 		}
-
 		if err = p.deleteFiles(num); err != nil {
 			return errors.Wrap(err, "updat prover status error")
 		}
+		p.rw.Lock()
 		p.front += num
+		p.rw.Unlock()
 	} else {
 		if !p.update.CompareAndSwap(true, false) {
 			err = errors.New("no update task pending update")
@@ -328,9 +327,13 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 		if err = p.organizeFiles(num); err != nil {
 			return errors.Wrap(err, "updat prover status error")
 		}
+		p.rw.Lock()
 		p.rear += num
+		p.rw.Unlock()
 	}
+	p.rw.Lock()
 	p.AccManager.UpdateSnapshot()
+	p.rw.Unlock()
 	return nil
 }
 
@@ -377,17 +380,12 @@ func (p *Prover) GetChainState() ChainState {
 	return state
 }
 
-// RestProofedCounter must be called when space proof is finished
-func (p *Prover) RestProofedCounter() {
-	p.rw.Lock()
-	defer p.rw.Unlock()
-	p.proofed = 0
-}
-
+// RestChallengeState must be called when space proof is finished
 func (p *Prover) RestChallengeState() {
 	p.rw.Lock()
 	defer p.rw.Unlock()
 	p.proofed = 0
+	p.chainState.delCh = nil
 	p.chainState.challenging = false
 }
 
@@ -403,6 +401,7 @@ func (p *Prover) SetChallengeState(challenging bool) error {
 			return err
 		}
 	}
+	p.chainState.delCh = make(chan struct{})
 	p.chainState.challenging = true
 	return nil
 }
@@ -759,6 +758,10 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	p.rw.Lock()
 	p.proofed = right - 1
 	p.rw.Unlock()
+	select {
+	case <-p.chainState.delCh:
+	default:
+	}
 	return proof, nil
 }
 
