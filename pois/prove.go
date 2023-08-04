@@ -112,7 +112,7 @@ func NewProver(k, n, d int64, ID []byte, space, setLen int64) (*Prover, error) {
 	prover := &Prover{
 		ID: ID,
 	}
-	FileSize = int64(expanders.HashSize) * n / (1024 * 1024)
+	FileSize = int64(expanders.HashSize) * n / (1024 * 1024) //file size must >=1M
 	prover.Expanders = expanders.ConstructStackedExpanders(k, n, d)
 	prover.space = space
 	prover.setLen = setLen
@@ -160,8 +160,11 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 	if err != nil {
 		return errors.Wrap(err, "recovery prover error")
 	}
-	p.generated = rear + generated
-	p.added = rear + generated
+	if generated%(p.setLen*p.clusterSize) != 0 { //restores must be performed in units of the number of files in a set
+		generated -= generated % (p.setLen * p.clusterSize)
+	}
+	p.generated = rear + generated //generated files do not need to be generated again
+	p.added = rear + generated     //the file index to be generated should be consistent with the generated file index firstly
 	p.commited = rear
 	p.space -= (p.rear - p.front) * FileSize                //calc proved space
 	p.space -= generated * (FileSize * (p.Expanders.K + 1)) //calc generated space
@@ -312,7 +315,7 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			return errors.Wrap(err, "updat prover status error")
 		}
 
-		if err = p.deleteFiles(num, false); err != nil {
+		if err = p.deleteFiles(num); err != nil {
 			return errors.Wrap(err, "updat prover status error")
 		}
 		p.front += num
@@ -833,7 +836,7 @@ func (p *Prover) organizeFiles(num int64) error {
 	return nil
 }
 
-func (p *Prover) deleteFiles(num int64, raw bool) error {
+func (p *Prover) deleteFiles(num int64) error {
 	for i := p.front + 1; i <= p.front+num; i++ {
 		fpath := path.Join(
 			IdleFilePath,
@@ -863,12 +866,6 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 				return errors.Wrap(err, "delete file error")
 			}
 		}
-	}
-
-	if !raw {
-		p.space += num * FileSize
-	} else {
-		p.space += num * FileSize * (p.Expanders.K + 1)
 	}
 	return nil
 }
