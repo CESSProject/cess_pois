@@ -274,7 +274,7 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 		if err = p.deleteFiles(num); err != nil {
 			return errors.Wrap(err, "updat prover status error")
 		}
-		p.front += num
+		p.front += num //update front
 	} else {
 		if !p.update.CompareAndSwap(true, false) {
 			err = errors.New("no update task pending update")
@@ -284,7 +284,7 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 		if err = p.organizeFiles(num); err != nil {
 			return errors.Wrap(err, "updat prover status error")
 		}
-		p.rear += num
+		p.rear += num //update rear
 	}
 	p.AccManager.UpdateSnapshot()
 	return nil
@@ -296,7 +296,7 @@ func (p *Prover) GetSpace() int64 {
 
 func (p *Prover) ReturnSpace(size int64) {
 	p.rw.Lock()
-	p.space += size
+	p.space += size //return user space to idle free space (unit MiB)
 	p.rw.Unlock()
 }
 
@@ -321,13 +321,7 @@ func (p *Prover) GetChainState() ChainState {
 	return state
 }
 
-// RestProofedCounter must be called when space proof is finished
-func (p *Prover) RestProofedCounter() {
-	p.rw.Lock()
-	defer p.rw.Unlock()
-	p.proofed = 0
-}
-
+// RestChallengeState must be called when space proof is finished
 func (p *Prover) RestChallengeState() {
 	p.rw.Lock()
 	defer p.rw.Unlock()
@@ -338,7 +332,7 @@ func (p *Prover) RestChallengeState() {
 func (p *Prover) SetChallengeState(challenging bool) error {
 	p.rw.Lock()
 	defer p.rw.Unlock()
-	if !challenging && !p.chainState.challenging {
+	if !challenging && !p.chainState.challenging { //if the challenge is in progress or started, the challenge information will not be updated
 		p.chainState.Acc = p.AccManager.GetSnapshot()
 		p.chainState.Rear = p.rear
 		p.chainState.Front = p.front
@@ -357,14 +351,14 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 		err     error
 		commits Commits
 	)
-	if !p.update.CompareAndSwap(false, true) {
+	if !p.update.CompareAndSwap(false, true) { //commitment is not allowed until the commit proof verification is completed
 		err = errors.New("lock is occupied")
 		return commits, errors.Wrap(err, "get commits error")
 	}
 	fileNum := p.generated
 	commited := p.commited
 	commitNum := p.setLen * p.clusterSize
-	if fileNum-commited < commitNum {
+	if fileNum-commited < commitNum { //a set of file commits per commit
 		err = errors.New("bad commit data")
 		return commits, errors.Wrap(err, "get commits error")
 	}
@@ -374,7 +368,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (commited)/(p.setLen*p.clusterSize)+1),
 		expanders.COMMIT_FILE,
 	)
-	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1)
+	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1) // one cluster container p.clusterSize idle files and p.Expanders.K temp files
 	commits.Roots, err = util.ReadProofFile(name, rootNum, int(p.Expanders.HashSize))
 	if err != nil {
 		return commits, errors.Wrap(err, "get commits error")
@@ -424,7 +418,7 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 	close(ch)
 
 	if lens > MaxProofThread {
-		lens = MaxProofThread
+		lens = MaxProofThread //concurrent threads
 	}
 	wg := sync.WaitGroup{}
 	wg.Add(lens)
