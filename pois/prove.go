@@ -159,8 +159,13 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 	if err != nil {
 		return errors.Wrap(err, "recovery prover error")
 	}
-	p.generated = rear + generated
-	p.added = rear + generated
+
+	if generated%(p.setLen*p.clusterSize) != 0 { // restores must be performed in units of the number of files in a set
+		generated -= generated % (p.setLen * p.clusterSize)
+	}
+
+	p.generated = rear + generated //generated files do not need to be generated again
+	p.added = rear + generated     // the file index to be generated should be consistent with the generated file index firstly
 	p.commited = rear
 	p.space -= (p.rear - p.front) * FileSize                //calc proved space
 	p.space -= generated * (FileSize * (p.Expanders.K + 1)) //calc generated space
@@ -209,24 +214,24 @@ func (p *Prover) GenerateIdleFileSet() error {
 	if !p.generate.CompareAndSwap(false, true) {
 		return errors.New("generate idle file set error: lock is occupied")
 	}
-	p.added += fileNum
-	p.space -= (fileNum + p.setLen*p.Expanders.K) * FileSize
-	start := (p.added-fileNum)/p.clusterSize + 1
+	p.added += fileNum                                       // Add the number of files to be generated
+	p.space -= (fileNum + p.setLen*p.Expanders.K) * FileSize //reduce available free space
+	start := (p.added-fileNum)/p.clusterSize + 1             //calculate the cluster index to start generating files
 	p.generate.Store(false)
 	if err := p.Expanders.GenerateIdleFileSet(
 		p.ID, start, p.setLen, IdleFilePath); err != nil {
 		// clean files
-		p.space += (fileNum + p.setLen*p.Expanders.K) * FileSize
+		p.space += (fileNum + p.setLen*p.Expanders.K) * FileSize //if error,return free space
 		return errors.Wrap(err, "generate idle file set error")
 	}
-	p.generated += fileNum
+	p.generated += fileNum //update the number of generated files
 	return nil
 }
 
 // CommitRollback need to be invoked when submit commits to verifier failure
 func (p *Prover) CommitRollback() bool {
 	if !p.update.CompareAndSwap(true, false) {
-		p.commited -= p.setLen * p.clusterSize
+		p.commited -= p.setLen * p.clusterSize //rollback commited file number
 		return true
 	}
 	return false
@@ -261,12 +266,12 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			err = errors.New("no delete task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		if p.proofed > 0 && p.proofed < p.front+num {
+		if p.proofed > 0 && p.proofed < p.front+num { //if the file to be deleted has not completed the space challenge, it cannot be deleted
 			err = errors.New("proving space proofs is not complete")
 			return errors.Wrap(err, "updat prover status error")
 		}
 
-		if err = p.deleteFiles(num, false); err != nil {
+		if err = p.deleteFiles(num); err != nil {
 			return errors.Wrap(err, "updat prover status error")
 		}
 		p.front += num
@@ -775,7 +780,7 @@ func (p *Prover) organizeFiles(num int64) error {
 	return nil
 }
 
-func (p *Prover) deleteFiles(num int64, raw bool) error {
+func (p *Prover) deleteFiles(num int64) error {
 	for i := p.front + 1; i <= p.front+num; i++ {
 		fpath := path.Join(
 			IdleFilePath,
@@ -805,12 +810,6 @@ func (p *Prover) deleteFiles(num int64, raw bool) error {
 				return errors.Wrap(err, "delete file error")
 			}
 		}
-	}
-
-	if !raw {
-		p.space += num * FileSize
-	} else {
-		p.space += num * FileSize * (p.Expanders.K + 1)
 	}
 	return nil
 }
