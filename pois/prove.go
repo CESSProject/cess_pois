@@ -381,6 +381,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 	return commits, nil
 }
 
+// ProveCommitAndAcc receives a commitment challenge and generates the corresponding commitment proof and accumulator proof
 func (p *Prover) ProveCommitAndAcc(challenges [][]int64) ([][]CommitProof, *AccProof, error) {
 	if !p.update.Load() {
 		return nil, nil, nil
@@ -396,7 +397,7 @@ func (p *Prover) ProveCommitAndAcc(challenges [][]int64) ([][]CommitProof, *AccP
 	return commitProofs, accProof, nil
 }
 
-// ProveCommit prove commits no more than MaxCommitProofThread
+// ProveCommit concurrent generate proofs of commit challenges, the number of concurrent coroutines does not exceed MaxProofThread
 func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 
 	var err error
@@ -423,7 +424,7 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 	wg := sync.WaitGroup{}
 	wg.Add(lens)
 	for i := 0; i < lens; i++ {
-		ants.Submit(func() {
+		ants.Submit(func() { //execute concurrency in the form of a coroutine pool
 			defer wg.Done()
 			for c := range ch {
 				if c.chals == nil {
@@ -445,6 +446,7 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 	return proofSet, errors.Wrap(err, "prove commits error")
 }
 
+// proveAcc receive the commit challenges and generate the corresponding accumulator proof
 func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 	var err error
 	if int64(len(challenges)) != p.setLen {
@@ -470,12 +472,12 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 
 	for i := int64(0); i < p.setLen; i++ {
 		for j := int64(0); j < p.clusterSize; j++ {
-			index := (challenges[i][0]-1)*p.clusterSize + j + 1
+			index := (challenges[i][0]-1)*p.clusterSize + j + 1 //calculate file index, expand relative index to real index
 			proof.Indexs[i*p.clusterSize+j] = index
 			root := roots[(p.Expanders.K+j)*p.setLen+i]
 			label := append([]byte{}, p.ID...)
 			label = append(label, expanders.GetBytes(index)...)
-			labels[i*p.clusterSize+j] = p.Expanders.GetHash(append(label, root...))
+			labels[i*p.clusterSize+j] = p.Expanders.GetHash(append(label, root...)) //calculate the label of the file as accumulator element
 		}
 	}
 	proof.WitChains, proof.AccPath, err = p.AccManager.AddElementsAndProof(labels)
@@ -499,6 +501,7 @@ func (p *Prover) ReadFileLabels(cluster, fidx int64, buf []byte) error {
 	return nil
 }
 
+// proveCommit generates a corresponding commit challenge proof for a single file
 func (p *Prover) proveCommit(challenge []int64, clusters []int64) ([]CommitProof, error) {
 
 	var err error
@@ -510,12 +513,12 @@ func (p *Prover) proveCommit(challenge []int64, clusters []int64) ([]CommitProof
 	)
 	for i := int64(1); i <= int64(len(proofs)); i++ {
 		index := challenge[i]
-		if i > p.clusterSize+1 {
+		if i > p.clusterSize+1 { // when the sub-file (layer) index is smaller than clusterSize+1, the parent node index is a relative index and needs to be restored to the real index
 			index = int64(proofs[i-2].Parents[challenge[i]].Index)
 		}
-		layer := index / p.Expanders.N
-		if i < p.clusterSize+1 {
-			layer = p.Expanders.K + i - 1
+		layer := index / p.Expanders.N // when i>=clusterSize+1,layers can be calculated directly
+		if i < p.clusterSize+1 {       // because the last clusterSize layer has been mapped to the expanders.K layer
+			layer = p.Expanders.K + i - 1 //so, when i<clusterSize+1 needs to restore the layer index
 		}
 		proofs[i-1], err = p.generateCommitProof(fdir, clusters, index, layer)
 		if err != nil {
@@ -525,6 +528,7 @@ func (p *Prover) proveCommit(challenge []int64, clusters []int64) ([]CommitProof
 	return proofs, nil
 }
 
+// generateCommitProof generate a proof of commit for a certain challenge (c) of a single file
 func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int64) (CommitProof, error) {
 
 	if subfile < 0 || subfile > p.clusterSize+p.Expanders.K-1 {
@@ -533,7 +537,7 @@ func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int
 
 	fpath := path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, subfile))
 	data := p.Expanders.FilePool.Get().(*[]byte)
-	defer p.Expanders.FilePool.Put(data)
+	defer p.Expanders.FilePool.Put(data) // obtain a storage space from the object pool and return it after use
 	if err := util.ReadFileToBuf(fpath, *data); err != nil {
 		return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 	}
@@ -541,7 +545,7 @@ func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int
 	var nodeTree, parentTree *tree.LightMHT
 	index := c % p.Expanders.N
 	nodeTree = tree.CalcLightMhtWithBytes(*data, int(p.Expanders.HashSize), true)
-	defer tree.RecycleMht(nodeTree)
+	defer tree.RecycleMht(nodeTree) // the space allocated by the object pool is also used when calculating the MHT, which needs to be recycled after use
 	pathProof, err := nodeTree.GetPathProof(*data, int(index), int(p.Expanders.HashSize))
 	if err != nil {
 		return CommitProof{}, errors.Wrap(err, "generate commit proof error")
@@ -621,6 +625,8 @@ func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int
 	return proof, nil
 }
 
+// ProveSpace receives a challenge, and a collection of files with a custom range, and generates a challenge proof.
+// Before using this method, you must ensure that SetChallengeState is called correctly
 func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof, error) {
 	var err error
 	if len(challenges) <= 0 || right-left <= 0 ||
@@ -700,10 +706,9 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	return proof, nil
 }
 
-// ProveDeletion sort out num*IdleFileSize(unit MiB) available space,
-// it subtracts all unused and uncommitted space, and deletes enough idle files to make room,
-// so the number of idle files actually deleted is the length of DeletionProof.Roots,
-// you need to update prover status with this value rather than num after the verification is successful.
+// ProveDeletion calculates the deletion proof for the specified number of idle files to be deleted, and returns a proof result channel and error channel.
+// When the result channel is not empty and the error channel is empty, the proof is valid.
+// Note that this method will not delete idle files and corresponding status information
 func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 	ch := make(chan *DeletionProof, 1)
 	Err := make(chan error, 1)
@@ -751,6 +756,7 @@ func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
 	return ch, Err
 }
 
+// organizeFiles auto called after the proof of commit verification is completed, used to delete unnecessary intermediate data.
 func (p *Prover) organizeFiles(num int64) error {
 	dir := path.Join(
 		IdleFilePath,
@@ -774,6 +780,7 @@ func (p *Prover) organizeFiles(num int64) error {
 	return nil
 }
 
+// deleteFiles delete idle files that have been verified to be deleted
 func (p *Prover) deleteFiles(num int64) error {
 	for i := p.front + 1; i <= p.front+num; i++ {
 		fpath := path.Join(
@@ -808,6 +815,7 @@ func (p *Prover) deleteFiles(num int64) error {
 	return nil
 }
 
+// calcGeneratedFile is used to collect valid idle files that have been generated to save computing power
 func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 
 	count := int64(0)

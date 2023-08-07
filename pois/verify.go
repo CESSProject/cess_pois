@@ -16,11 +16,11 @@ import (
 )
 
 var (
-	IdleSetLen  int64 = 32
-	ClusterSize int64 = 8
-	verifier    *Verifier
-	SpaceChals  int64 = 8
-	Pick              = 4
+	IdleSetLen  int64     = 32 // indicates the number of clusters owned by an idle file collection
+	ClusterSize int64     = 8  // indicates how many idle files a cluster has
+	verifier    *Verifier      // a globally unique validator object
+	SpaceChals  int64     = 8  // during the space challenge, SpaceChals is the number of labels randomly selected for each idle file
+	Pick                  = 4  // indicates the number of nodes randomly selected when verifying expanders node dependencies
 )
 
 type Record struct {
@@ -42,6 +42,7 @@ type Verifier struct {
 	Nodes     map[string]*ProverNode
 }
 
+// NewVerifier create a verifier object, it only needs to be created once in the lifetime of the program
 func NewVerifier(k, n, d int64) *Verifier {
 	verifier = &Verifier{
 		Expanders: *expanders.NewExpanders(k, n, d, expanders.DEFAULT_HASH_SIZE),
@@ -57,12 +58,14 @@ func GetVerifier() *Verifier {
 	return verifier
 }
 
+// RegisterProverNode registers a storage node prover data for state maintenance during commit proof verification and deletion proof verification
 func (v *Verifier) RegisterProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) {
 	id := hex.EncodeToString(ID)
 	node := NewProverNode(ID, key, acc, front, rear)
 	v.Nodes[id] = node
 }
 
+// NewProverNode is used to create a new prover data object for state maintenance, incoming information should come from the blockchain
 func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) *ProverNode {
 	return &ProverNode{
 		ID: ID,
@@ -86,6 +89,7 @@ func (v *Verifier) IsLogout(ID []byte) bool {
 	return !ok
 }
 
+// LogoutProverNode delete the prover object with the specified ID, and return its latest state information
 func (v *Verifier) LogoutProverNode(ID []byte) ([]byte, int64, int64) {
 	id := hex.EncodeToString(ID)
 	node, ok := v.Nodes[id]
@@ -99,6 +103,7 @@ func (v *Verifier) LogoutProverNode(ID []byte) ([]byte, int64, int64) {
 	return acc, front, rear
 }
 
+// ReceiveCommits receives commits data from the specified prover for subsequent proof verification.
 func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
@@ -130,6 +135,7 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 	return true
 }
 
+// CommitChallenges is used to calculate random challenges for previously received commits from the specified prover.
 func (v *Verifier) CommitChallenges(ID []byte) ([][]int64, error) {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
@@ -137,13 +143,13 @@ func (v *Verifier) CommitChallenges(ID []byte) ([][]int64, error) {
 		err := errors.New("prover node not found")
 		return nil, errors.Wrap(err, "generate commit challenges error")
 	}
-	challenges := make([][]int64, IdleSetLen) //
-	start := (pNode.CommitsBuf.FileIndexs[0] - 1) / ClusterSize
-	for i := int64(0); i < IdleSetLen; i++ { //
-		challenges[i] = make([]int64, v.Expanders.K+ClusterSize+1) //
-		challenges[i][0] = start + i + 1                           // calculate file cluster id
+	challenges := make([][]int64, IdleSetLen)                   // generate random challenges in units of file clusters
+	start := (pNode.CommitsBuf.FileIndexs[0] - 1) / ClusterSize // compute the first file cluster index
+	for i := int64(0); i < IdleSetLen; i++ {
+		challenges[i] = make([]int64, v.Expanders.K+ClusterSize+1) // each file cluster contains a cluster index, clusterSize+expanders.K random node indexes (one for each layer)
+		challenges[i][0] = start + i + 1                           // calculate file cluster index
 		//
-		for j := 1; j <= int(ClusterSize); j++ {
+		for j := 1; j <= int(ClusterSize); j++ { // generate a random challenge for each idle file in the file cluster
 			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
 			if err != nil {
 				return nil, errors.Wrap(err, "generate commit challenges error")
@@ -152,6 +158,7 @@ func (v *Verifier) CommitChallenges(ID []byte) ([][]int64, error) {
 			challenges[i][j] = r.Int64()
 		}
 
+		// generate random challenges for K-th layer nodes
 		r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
 		if err != nil {
 			return nil, errors.Wrap(err, "generate commit challenges error")
@@ -159,14 +166,13 @@ func (v *Verifier) CommitChallenges(ID []byte) ([][]int64, error) {
 		r.Add(r, new(big.Int).SetInt64(v.Expanders.N*(v.Expanders.K-1)))
 		challenges[i][ClusterSize+1] = r.Int64()
 
-		for j := int(ClusterSize + 2); j < len(challenges[i]); j++ { //
+		for j := int(ClusterSize + 2); j < len(challenges[i]); j++ { // generate random challenge relative indices for layers [0,k-1]
 			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.D+1))
 			if err != nil {
 				return nil, errors.Wrap(err, "generate commit challenges error")
 			}
 			challenges[i][j] = r.Int64()
 		}
-		//
 	}
 	return challenges, nil
 }
