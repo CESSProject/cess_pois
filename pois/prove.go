@@ -269,7 +269,7 @@ func (p *Prover) GenerateIdleFileSets(tNum int) error {
 
 // CommitRollback need to be invoked when submit commits to verifier failure
 func (p *Prover) CommitRollback() bool {
-	if !p.update.CompareAndSwap(true, false) {
+	if p.update.CompareAndSwap(true, false) {
 		p.commited -= p.setLen * p.clusterSize
 		return true
 	}
