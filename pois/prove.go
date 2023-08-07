@@ -23,7 +23,6 @@ import (
 var (
 	FileSize       int64  = int64(expanders.HashSize)
 	AccPath        string = acc.DEFAULT_PATH
-	AccBackupPath  string = "./chain-state-backup"
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 4 //please set according to the number of cores
 	SpaceFullError        = errors.New("generate idle file set error: not enough space")
@@ -48,7 +47,6 @@ type Prover struct {
 
 type Config struct {
 	AccPath        string
-	AccBackupPath  string
 	IdleFilePath   string
 	MaxProofThread int
 }
@@ -118,6 +116,7 @@ func NewProver(k, n, d int64, ID []byte, space, setLen int64) (*Prover, error) {
 	prover.space = space
 	prover.setLen = setLen
 	prover.clusterSize = k
+	prover.chainState = &ChainState{}
 	tree.InitMhtPool(int(n), expanders.HashSize)
 	return prover, nil
 }
@@ -132,17 +131,12 @@ func (p *Prover) Init(key acc.RsaKey, config Config) error {
 	if err != nil {
 		return errors.Wrap(err, "init prover error")
 	}
-	p.chainState = &ChainState{
-		Acc:   p.AccManager.GetSnapshot(),
-		Rear:  0,
-		Front: 0,
-	}
 	return nil
 }
 
 func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) error {
-	if key.G.BitLen() == 0 || key.N.BitLen() == 0 ||
-		front < 0 || rear < 0 || front > rear {
+	if key.G.BitLen() == 0 || key.N.BitLen() == 0 || front < 0 ||
+		rear < 0 || front > rear || rear%(p.setLen*p.clusterSize) != 0 {
 		return errors.New("bad recovery params")
 	}
 	checkConfig(config)
@@ -173,9 +167,6 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 }
 
 func checkConfig(config Config) {
-	if config.AccBackupPath != "" {
-		AccBackupPath = config.AccBackupPath
-	}
 	if config.AccPath != "" {
 		AccPath = config.AccPath
 	}
@@ -188,13 +179,17 @@ func checkConfig(config Config) {
 	}
 }
 
-func (p *Prover) RecoveryChainState(key acc.RsaKey, accSnp []byte, front, rear int64) error {
+func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear int64) error {
+
+	p.rw.Lock()
+	defer p.rw.Unlock()
+
 	p.chainState = &ChainState{
 		Rear:  rear,
 		Front: front,
 	}
 	var err error
-	p.chainState.Acc, err = acc.Recovery(AccBackupPath, key, front, rear)
+	p.chainState.Acc, err = acc.Recovery(AccPath, key, front, rear)
 	if err != nil {
 		return errors.Wrap(err, "recovery chain state error")
 	}
@@ -202,6 +197,8 @@ func (p *Prover) RecoveryChainState(key acc.RsaKey, accSnp []byte, front, rear i
 		err = errors.New("the restored acc value is not equal to the snapshot value")
 		return errors.Wrap(err, "recovery chain state error")
 	}
+	p.chainState.delCh = make(chan struct{})
+	p.chainState.challenging = true
 	return nil
 }
 
@@ -309,16 +306,11 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 			err = errors.New("no delete task pending update")
 			return errors.Wrap(err, "updat prover status error")
 		}
-		for p.chainState.challenging && p.proofed < p.front+num {
-			p.chainState.delCh <- struct{}{}
-		}
-		if err = p.deleteFiles(num); err != nil {
-			return errors.Wrap(err, "updat prover status error")
-		}
 		p.rw.Lock()
 		p.front += num
 		p.rw.Unlock()
 	} else {
+
 		if !p.update.CompareAndSwap(true, false) {
 			err = errors.New("no update task pending update")
 			return errors.Wrap(err, "updat prover status error")
@@ -387,23 +379,6 @@ func (p *Prover) RestChallengeState() {
 	p.proofed = 0
 	p.chainState.delCh = nil
 	p.chainState.challenging = false
-}
-
-func (p *Prover) SetChallengeState(challenging bool) error {
-	p.rw.Lock()
-	defer p.rw.Unlock()
-	if !challenging && !p.chainState.challenging {
-		p.chainState.Acc = p.AccManager.GetSnapshot()
-		p.chainState.Rear = p.rear
-		p.chainState.Front = p.front
-		//backup acc file
-		if err := util.CopyFiles(AccPath, AccBackupPath); err != nil {
-			return err
-		}
-	}
-	p.chainState.delCh = make(chan struct{})
-	p.chainState.challenging = true
-	return nil
 }
 
 // GetIdleFileSetCommits can not run concurrently! And num must be consistent with the data given by CESS.
@@ -839,37 +814,29 @@ func (p *Prover) organizeFiles(num int64) error {
 	return nil
 }
 
-func (p *Prover) deleteFiles(num int64) error {
-	for i := p.front + 1; i <= p.front+num; i++ {
-		fpath := path.Join(
-			IdleFilePath,
-			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (i-1)/(p.setLen*p.clusterSize)+1),
-			fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
-			fmt.Sprintf("%s-%d", expanders.FILE_NAME, (i-1)%p.clusterSize+p.Expanders.K),
-		)
-		if err := util.DeleteFile(fpath); err != nil {
-			return errors.Wrap(err, "delete file error")
-		}
-	}
-	//organize empty dirs
-	last := (p.front+num-1)/(p.setLen*p.clusterSize) + 1
-	dirs, err := os.ReadDir(IdleFilePath)
-	if err != nil {
-		return errors.Wrap(err, "delete file error")
+func (p *Prover) DeleteFiles() error {
+
+	for p.chainState.challenging && p.proofed < p.front {
+		p.chainState.delCh <- struct{}{}
 	}
 
-	for _, dir := range dirs {
-		slice := strings.Split(dir.Name(), "-")
-		index, err := strconv.Atoi(slice[len(slice)-1])
-		if err != nil {
-			return errors.Wrap(err, "delete file error")
-		}
-		if int64(index) < last {
-			if err = util.DeleteDir(path.Join(IdleFilePath, dir.Name())); err != nil {
-				return errors.Wrap(err, "delete file error")
-			}
-		}
+	// // delete all files before front
+	indexs := []int64{
+		(p.front-1)/(p.setLen*p.clusterSize) + 1,  //idle-files-i
+		(p.front-1)/p.clusterSize + 1,             //file-cluster-i
+		(p.front-1)%p.clusterSize + p.Expanders.K, //sub-file-i
 	}
+
+	err := deleter(IdleFilePath, indexs)
+	if err != nil {
+		return errors.Wrap(err, "delete idle files error")
+	}
+
+	err = acc.CleanBackup(AccPath, int((p.front-1)/acc.DEFAULT_ELEMS_NUM))
+	if err != nil {
+		return errors.Wrap(err, "delete idle files error")
+	}
+
 	return nil
 }
 
@@ -879,16 +846,17 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 	fileTotalSize := FileSize * (p.Expanders.K + p.clusterSize) * 1024 * 1024
 	rootSize := (p.setLen*(p.Expanders.K+p.clusterSize) + 1) * int64(expanders.HashSize)
 	entries, err := ioutil.ReadDir(dir)
+	next := int64(1)
 	if err != nil {
 		return count, err
 	}
 	for _, entry := range entries {
 		sidxs := strings.Split(entry.Name(), "-")
-		if len(sidxs) < 2 {
+		if len(sidxs) < 3 {
 			continue
 		}
 		if idx, err := strconv.ParseInt(sidxs[2], 10, 64); err != nil ||
-			idx*p.setLen*p.clusterSize <= p.rear {
+			idx != p.rear/(p.setLen*p.clusterSize)+next {
 			continue
 		}
 		if !entry.IsDir() {
@@ -905,6 +873,8 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 		if err != nil {
 			return count, err
 		}
+
+		i := 0
 		for _, cluster := range clusters {
 			if !cluster.IsDir() {
 				continue
@@ -922,8 +892,44 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 			}
 			if size == fileTotalSize {
 				count += p.clusterSize
+				i++
 			}
+		}
+		if i == int(p.setLen) {
+			next += 1
 		}
 	}
 	return count, nil
+}
+
+func deleter(rootDir string, indexs []int64) error {
+	if len(indexs) <= 0 {
+		return nil
+	}
+	entrys, err := os.ReadDir(rootDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entrys {
+		names := strings.Split(entry.Name(), "-")
+		idx, err := strconv.Atoi(names[len(names)-1])
+		if err != nil {
+			continue
+		}
+		if int64(idx) < indexs[0] || (int64(idx) == indexs[0] && !entry.IsDir()) {
+			if err := util.DeleteDir(
+				path.Join(rootDir, entry.Name())); err != nil {
+				return err
+			}
+			continue
+		}
+		if int64(idx) != indexs[0] {
+			continue
+		}
+		err = deleter(path.Join(rootDir, entry.Name()), indexs[1:])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

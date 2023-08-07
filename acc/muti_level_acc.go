@@ -148,9 +148,6 @@ func (acc *MutiLevelAcc) UpdateSnapshot() bool {
 	}
 	acc.createSnapshot()
 	acc.stable = true
-	//delete buckup file
-	index := acc.Deleted / DEFAULT_ELEMS_NUM
-	cleanBackup(acc.FilePath, index)
 	return true
 }
 
@@ -418,7 +415,7 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 		return nil, err
 	}
 	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
-	index -= int64(acc.Deleted)
+	index -= int64(acc.Deleted - acc.Deleted%DEFAULT_ELEMS_NUM)
 	p := acc.Accs
 	var wit *WitnessNode
 	i := 0
@@ -559,11 +556,6 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 		backup, err := readBackup(acc.FilePath, index)
 		if err != nil || len(backup.Values)+offset != DEFAULT_ELEMS_NUM {
 			backup, err = readAccData(acc.FilePath, index)
-			if err != nil {
-				return err
-			}
-		} else {
-			err = recoveryAccData(acc.FilePath, index)
 			if err != nil {
 				return err
 			}

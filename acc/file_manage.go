@@ -68,7 +68,7 @@ func deleteAccData(dir string, last int) error {
 	return nil
 }
 
-func cleanBackup(dir string, index int) error {
+func CleanBackup(dir string, index int) error {
 	backup := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
 	err := util.DeleteFile(backup)
 	return errors.Wrap(err, "clean backup error")

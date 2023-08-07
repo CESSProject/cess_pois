@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	r "math/rand"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -77,6 +75,9 @@ func SaveFile(path string, data []byte) error {
 }
 
 func DeleteFile(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
 	return os.Remove(path)
 }
 
@@ -143,44 +144,4 @@ func CopyData(target []byte, src ...[]byte) {
 		count += l
 		copy(target[count-l:count], d)
 	}
-}
-
-func CopyFiles(src, des string) error {
-
-	if _, err := os.Stat(des); err == nil {
-		err = os.RemoveAll(des)
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := os.MkdirAll(des, 0777); err != nil {
-		return err
-	}
-
-	files, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		sf, err := os.Open(path.Join(src, file.Name()))
-		if err != nil {
-			return err
-		}
-		df, err := os.Create(path.Join(des, file.Name()))
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(df, sf)
-		sf.Close()
-		df.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
