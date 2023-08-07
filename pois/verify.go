@@ -177,6 +177,8 @@ func (v *Verifier) CommitChallenges(ID []byte) ([][]int64, error) {
 	return challenges, nil
 }
 
+// SpaceChallenges generate random space challenge, the number of generated challenges is controlled by the parameter params,
+// the challenge content is a random node index for each idle file.
 func (v *Verifier) SpaceChallenges(param int64) ([]int64, error) {
 	//Randomly select several nodes from idle files as random challenges
 	if param < SpaceChals {
@@ -202,6 +204,7 @@ func (v *Verifier) SpaceChallenges(param int64) ([]int64, error) {
 	return challenges, nil
 }
 
+// VerifyCommitProofs verifies whether the proof of commitment submitted by the prover is correct.
 func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]CommitProof) error {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
@@ -318,6 +321,7 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 	return nil
 }
 
+// VerifyNodeDependencies is used to verify whether the node dependencies in the proof of commitment given by the prover are legal
 func (v *Verifier) VerifyNodeDependencies(ID []byte, chals [][]int64, proofs [][]CommitProof, pick int) error {
 	if pick > len(proofs) {
 		pick = len(proofs)
@@ -357,6 +361,8 @@ func (v *Verifier) VerifyNodeDependencies(ID []byte, chals [][]int64, proofs [][
 	return nil
 }
 
+// VerifyAcc is used to verify whether the accumulator constructed by the new idle file contained in the commit proofs is legally constructed on the original accumulator.
+// This is one of the most important processes to ensure the security of Proof of Space.
 func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
@@ -395,6 +401,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 	return nil
 }
 
+// VerifySpace is used to verify the space challenge proof submitted by the prover, which supports block verification
 func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpaceProof) error {
 	if len(chals) <= 0 || proof.Left <= pNode.Front || pNode.Rear+1 < proof.Right { //
 		err := errors.New("bad proof data")
@@ -439,6 +446,8 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 	return nil
 }
 
+// VerifyDeletion is used to verify the deletion proof submitted by the prover.
+// A delete proof is responsible for removing the specified number of proofed idle files from the prover's Pois state.
 func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
@@ -466,3 +475,10 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 	pNode.Front += int64(lens)
 	return nil
 }
+
+/*
+	Notes:
+	The process of each method of the space proof verifier module is relatively clear,
+	and basically complies with the design of the CESS Proof of Idle Space (PoIS) algorithm,
+	you can read the code details in conjunction with relevant literature.
+*/
