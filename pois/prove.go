@@ -365,9 +365,12 @@ func (p *Prover) CommitDataIsReady() bool {
 }
 
 func (p *Prover) GetChainState() ChainState {
+	p.rw.RLock()
+	defer p.rw.RUnlock()
 	state := ChainState{
 		Rear:  p.chainState.Rear,
 		Front: p.chainState.Front,
+		Acc:   p.chainState.Acc,
 	}
 	return state
 }
