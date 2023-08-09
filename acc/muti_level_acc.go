@@ -157,6 +157,12 @@ func (acc *MutiLevelAcc) RollBack() bool {
 	if acc.isUpdate || acc.snapshot == nil {
 		return false
 	}
+	if acc.Deleted != acc.snapshot.Deleted {
+		err := recoveryAccData(acc.FilePath, acc.Deleted/DEFAULT_ELEMS_NUM)
+		if err != nil {
+			return false
+		}
+	}
 	acc.copy(acc.snapshot)
 	acc.stable = true
 	return true

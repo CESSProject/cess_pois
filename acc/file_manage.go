@@ -94,7 +94,9 @@ func backupAccData(dir string, index int) error {
 func recoveryAccData(dir string, index int) error {
 	backup := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
 	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
-
+	if _, err := os.Stat(backup); err != nil {
+		return nil
+	}
 	err := os.Rename(backup, fpath)
 	return errors.Wrap(err, "recovery element data error")
 }
