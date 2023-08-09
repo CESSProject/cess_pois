@@ -599,8 +599,11 @@ func (acc *MutiLevelAcc) GetRecoveryFileNum() (int64, error) {
 	}
 
 	for i := 0; i < len(entrys); i++ {
-		name := strings.Split(entrys[i].Name(), "-")[2]
-		index, err := strconv.Atoi(name)
+		if strings.Contains(entrys[i].Name(), DEFAULT_BACKUP_NAME) {
+			continue
+		}
+		name := strings.Split(entrys[i].Name(), "-")
+		index, err := strconv.Atoi(name[len(name)-1])
 		if err != nil {
 			return num, err
 		}
