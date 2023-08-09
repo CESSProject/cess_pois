@@ -5,8 +5,6 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -551,10 +549,6 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	if rear == int64(acc.Deleted) {
 		return nil
 	}
-	fileNum, err := acc.GetRecoveryFileNum(acc.Deleted / DEFAULT_ELEMS_NUM)
-	if err != nil {
-		return err
-	}
 	num := (int(rear) - acc.Deleted - 1) / DEFAULT_ELEMS_NUM
 	offset := acc.Deleted % DEFAULT_ELEMS_NUM
 	for i := 0; i <= num; i++ {
@@ -567,17 +561,15 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			}
 		}
 		node := &AccNode{}
-		if fileNum != rear-int64(acc.Deleted) {
-			left, right := 0, len(backup.Values)
-			if i == 0 && offset > 0 &&
-				(len(backup.Values) == DEFAULT_ELEMS_NUM || DEFAULT_ELEMS_NUM-offset < len(backup.Values)) {
-				left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - len(backup.Values)) //sub real file offset
-			}
-			if i == num && rear%DEFAULT_ELEMS_NUM != 0 {
-				right = int((rear-1)%DEFAULT_ELEMS_NUM + 1)
-			}
-			backup.Values = backup.Values[left:right]
+		left, right := 0, len(backup.Values)
+		if i == 0 && DEFAULT_ELEMS_NUM-offset < right {
+			left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - right) //sub real file offset
 		}
+		if i == num && rear%DEFAULT_ELEMS_NUM != int64(right) {
+			right = int((rear-1)%DEFAULT_ELEMS_NUM + 1)
+		}
+		backup.Values = backup.Values[left:right]
+
 		node.Len = len(backup.Values)
 		node.Value = generateAcc(
 			acc.Key, acc.Key.G.Bytes(),
@@ -591,34 +583,34 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	return nil
 }
 
-func (acc *MutiLevelAcc) GetRecoveryFileNum(start int) (int64, error) {
-	var num int64
-	entrys, err := os.ReadDir(acc.FilePath)
-	if err != nil {
-		return num, err
-	}
+// func (acc *MutiLevelAcc) GetRecoveryFileNum(start int) (int64, error) {
+// 	var num int64
+// 	entrys, err := os.ReadDir(acc.FilePath)
+// 	if err != nil {
+// 		return num, err
+// 	}
 
-	for i := 0; i < len(entrys); i++ {
-		if strings.Contains(entrys[i].Name(), DEFAULT_BACKUP_NAME) {
-			continue
-		}
-		name := strings.Split(entrys[i].Name(), "-")
-		index, err := strconv.Atoi(name[len(name)-1])
-		if err != nil {
-			return num, err
-		}
-		if index < start {
-			continue
-		}
-		files, err := readAccData(acc.FilePath, index)
-		if err != nil {
-			return num, err
-		}
-		num += int64(len(files.Values))
-	}
+// 	for i := 0; i < len(entrys); i++ {
+// 		if strings.Contains(entrys[i].Name(), DEFAULT_BACKUP_NAME) {
+// 			continue
+// 		}
+// 		name := strings.Split(entrys[i].Name(), "-")
+// 		index, err := strconv.Atoi(name[len(name)-1])
+// 		if err != nil {
+// 			return num, err
+// 		}
+// 		if index < start {
+// 			continue
+// 		}
+// 		files, err := readAccData(acc.FilePath, index)
+// 		if err != nil {
+// 			return num, err
+// 		}
+// 		num += int64(len(files.Values))
+// 	}
 
-	return num, nil
-}
+// 	return num, nil
+// }
 
 // Accumulator validation interface
 
