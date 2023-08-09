@@ -551,7 +551,7 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	if rear == int64(acc.Deleted) {
 		return nil
 	}
-	fileNum, err := acc.GetRecoveryFileNum()
+	fileNum, err := acc.GetRecoveryFileNum(acc.Deleted / DEFAULT_ELEMS_NUM)
 	if err != nil {
 		return err
 	}
@@ -591,7 +591,7 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	return nil
 }
 
-func (acc *MutiLevelAcc) GetRecoveryFileNum() (int64, error) {
+func (acc *MutiLevelAcc) GetRecoveryFileNum(start int) (int64, error) {
 	var num int64
 	entrys, err := os.ReadDir(acc.FilePath)
 	if err != nil {
@@ -606,6 +606,9 @@ func (acc *MutiLevelAcc) GetRecoveryFileNum() (int64, error) {
 		index, err := strconv.Atoi(name[len(name)-1])
 		if err != nil {
 			return num, err
+		}
+		if index < start {
+			continue
 		}
 		files, err := readAccData(acc.FilePath, index)
 		if err != nil {
