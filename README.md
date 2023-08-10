@@ -3,13 +3,13 @@
 CESS proof of idle space is used to reduce the work pressure of TEE Worker and improve the efficiency of idle space certification.
 CESS proof of idle space transfers the generation of idle files to storage nodes, and through a series of challenge-response interactive proof processes to ensure that storage nodes honestly generate and store idle files.
 
-In the proof of idle space, the idle file generation algorithm requires storage nodes to spend a certain amount of time and space to calculate and store idle files. Each idle file is 64M, the calculation of a single file cannot be accelerated in parallel, but multiple files can be generated at the same time. After generating a batch of idle files, the storage node needs to submit the merkel hash tree root of the files to the TEE Worker to commit to generate these idle spaces.
+In the proof of idle space, the idle file generation algorithm requires storage nodes to spend a certain amount of time and space to calculate and store idle files. A file set contains 32 clusters, and each cluster contains 8 idle files. The idle files in the file set cannot be calculated in parallel, but multiple file sets can be generated at the same time. After generating a batch of idle files, the storage node needs to submit the merkel hash tree root of the files to the TEE Worker to commit to certify these idle spaces.
 
 Then TEE Worker will challenge the storage nodes for these commitments. Storage nodes need to prove that these idle files are generated in a legal way, and we call this process Proof of File Commitment.If these commitments prove to be verified by TEE Worker, the CESS network will recognize that these corresponding idle spaces are valid.
 
 Then, the consensus node may initiate a space proof challenge to the storage nodes of the whole network at any time. If the storage node passes the challenge, it proves that it continues to hold the promised idle space, and the CESS network will issue rewards to these honest storage nodes, which is similar to the storage proof of CESS.
 
-We believe that providing more storage space is cheaper than providing higher computing power.At present, it takes at least a few minutes for a storage node to generate a batch of idle files(even one file takes so long), and the proof process only takes more than ten seconds. The storage node cannot temporarily generate idle files and provide valid proofs in a short period of time, which constitutes the security basis of the proof of idle space.
+We believe that providing more storage space is cheaper than providing higher computing power.At present, it takes at least an hour for a storage node to generate an idle file set, and the proof process only takes over a minute. The storage node cannot temporarily generate idle files and provide valid proofs in a short period of time, which constitutes the security basis of the proof of idle space.
 
 ## Verifier guide
 
@@ -19,12 +19,6 @@ The verifier is responsible for verifying the proof provided by the prover. In t
 Before using the verifier, it needs to be initialized first. 
 Since the lightweight MHT is used in the verification process, the MHT object pool also needs to be initialized.
 ```go
-import (
-    "cess_pos_demo/pois"
-	"cess_pos_demo/tree"
-    "cess_pos_demo/expanders"
-)
-
 // k,n,d respectively represent the number of layers of expanders, the number of nodes in each layer and the in-degree of each node.
 // k,n,d are always set to 7, 1024*1024 and 64.
 verifier:=pois.NewVerifier(k,n,d)
@@ -210,23 +204,44 @@ prover.RunIdleFileGenerationServer(pois.MaxCommitProofThread)
 ```
 ### POIS step 1:Generate Idle Files
 
+Generate a single idle file set, note that this method is blocking and may return an error.
 ```go
-// Request the file generation service to generate num idle files, it is asynchronous, and return true when the command is sent successfully.
-// It essentially continuously inserts a certain number of file IDs into the channel, which may be blocked when the channel is full.
-// When the file is generated, the corresponding field in the prover will be updated.
-ok := prover.GenerateFile(num)
-// You can call this method according to actual needs to flexibly control file generation
+err = prover.GenerateIdleFileSet()
+if err != nil {
+    // error handling code ...
+}
 ```
+
+If you want to increase the generation speed of idle files, you can use multi-threading method to generate multiple sets of idle files at the same time.
+
+```go
+err = prover.GenerateIdleFileSets(num) //num is number of thread you want
+if err != nil {
+    // error handling code ...
+}
+```
+
+Be careful not to let the number of threads exceed the number of your CPU cores, otherwise it will be inefficient, and considering that you have to run other services, it is recommended not to exceed half of the number of CPU cores. In addition, each thread will occupy about 1.75G of memory, please pay attention to whether your hardware resources are sufficient.
 
 ### POIS step 2:Submit File Commits
 
+The idle file commitment is used to declare to the verifier the free space to be certified.
 ``` go
 // GetCommits method read file commits from dir storaged idle files. You need to submit commits to verifier.
-// num is the number you want to commit, it is must less than or equal to number of idle files that have been generated but not committed yet.
-commits, err := prover.GetCommits(num)
+commits, err := prover.GetCommits()
 if err != nil {
     //error handling code...
 }
+```
+To improve certification efficiency, you can generate a separate thread to perform steps 2 and 3 independently of idle file generation. 
+At this point, the following method can be polled to know whether enough idle files have been generated to submit the certification.
+``` go
+
+for !prover.CommitDataIsReady(){
+    
+    time.Sleep(time.Second*30)
+}
+
 ```
 
 ### POIS step 3:Prove Commits and ACC
@@ -259,9 +274,7 @@ if err != nil {
 ok:=prover.AccRollback(false)
 ```
 
-*Note that this step is important!*
-The storage node needs to submit the accumulator (acc),front and rear (pois status) to the blockchain. In order to save transaction costs, batch submission is supported.
-Frequent submission will increase the consumption of transaction fees, but it can make the chain nodes perceive the change of idle space faster and get more rewards. Therefore, it is up to the storage miner to decide when to commit the update.
+In the current version, a free space certification process can certify 16GiB free space for storage nodes. After the certification is completed, the storage node needs to end the session (logout) to the TEE Worker, and the TEE Worker will return the signature of the latest pois status. The storage node can submit the signature as evidence to the chain to make CESS recognize the newly certified free space.
 
 It is supported to generate and delete idle files at the same time, but it needs to be serialized when updating the accumulator, so please update the status (use `prover.UpdateStatus(...)`) in time after completing the commitment challenge verification to prevent the deletion proof from being blocked.
 
@@ -282,7 +295,7 @@ if err != nil {
 //send spaceProof to verifier and wait for the response, but the space challenge didn't change any state, so no update is required based on the response
 ```
 *Note:*
-Whenever you complete a batch of space proof challenge, you need to calculate the hash value of the proof data, calculate the MHT with the hash values of all proof batches as elements, and submit the root hash value to the blockchain as proof of completion.
+Whenever you complete a batch of space proof challenge, you need to calculate the hash value of the proof data, calculate the total hash with the hash values of all proof batches as content (Arrange splicing in order), and submit the total hash value to the blockchain as proof of completion.
 
 When the space proofs of all idle files are verified, the verifier will return the signature of the verification result, and you needs to submit the result and signature to the blockchain.Please submit in time to avoid overtime penalty.
 
@@ -290,7 +303,7 @@ When the space proofs of all idle files are verified, the verifier will return t
 
 When storing new user files, file deletion proof is required. The latest proof of space adopts queue model, deleting elements from the front and inserting elements from the rear, so the insertion and deletion of idle files do not conflict, they can be performed concurrently, but the priority of deletion is higher than that of insertion.
 ```go
-//ProveDeletion passes in number of file blocks (the file block size is defined in pois.FileSize, generally 256MiB),
+//ProveDeletion passes in number of file blocks (the file block size is defined in pois.FileSize, generally 64MiB),
 //so you first need to calculate how many file blocks the user file occupies, and call this method with this value as a parameter.
 //The method returns a deletion proof channel and an error channel, because the deletion process has a lot of work and is asynchronous, you need to monitor the deletion result.
 chProof, Err := prover.ProveDeletion(num)
@@ -315,6 +328,6 @@ prover.AccRollback(true) //If the parameter is set to true, it means the rollbac
 Please note that the verifier will return the signature of the new state after verifying the proof is successful, you need to submit the new state to the blockchain every time the deletion proof is successfully verified.When the transaction is sent successfully, you also need to call the `prover.UpdateChainState(num,true)` and `` method in time to update the local state.The precautions here are the same as before.
 
 
-Please note that the space discussed here is a logical space, please provide a reasonable logical idle space for the storage node when using the space proof to prevent unnecessary errors.And when the user's file is less than 64M*256 (assuming that the file block size stipulated by the space proof is 64M), the minimum space needs to be 64M.
+Please note that the space discussed here is a logical space, please provide a reasonable logical idle space for the storage node when using the space proof to prevent unnecessary errors.And when the user's file is less than 64M*256 (assuming that the file block size stipulated by the space proof is 64M), the minimum space needs to be 64M\*256\*2=16G. Because additional space is needed to store intermediate data during idle space certification, the minimum space is about twice as large. In addition, when you enable multi-threading to generate idle files, the minimum space required needs to be multiplied by the thread quantity. Of course, you can also adjust the number of threads in time to make use of the last remaining small space.
 
 Finally, due to the need to store accumulators, cache intermediate results of proof of space, and cache user files, you need to reserve enough external space instead of declaring all physical space as logical space for proof of space.
