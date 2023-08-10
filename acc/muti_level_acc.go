@@ -559,14 +559,16 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			if err != nil {
 				return err
 			}
+		} else {
+			err = recoveryAccData(acc.FilePath, index)
+			if err != nil {
+				return err
+			}
 		}
 		node := &AccNode{}
 		left, right := 0, len(backup.Values)
 		if i == 0 && DEFAULT_ELEMS_NUM-offset < right {
 			left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - right) //sub real file offset
-		}
-		if i == num && rear%DEFAULT_ELEMS_NUM != int64(right) {
-			right = int((rear-1)%DEFAULT_ELEMS_NUM + 1)
 		}
 		backup.Values = backup.Values[left:right]
 
@@ -582,35 +584,6 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	}
 	return nil
 }
-
-// func (acc *MutiLevelAcc) GetRecoveryFileNum(start int) (int64, error) {
-// 	var num int64
-// 	entrys, err := os.ReadDir(acc.FilePath)
-// 	if err != nil {
-// 		return num, err
-// 	}
-
-// 	for i := 0; i < len(entrys); i++ {
-// 		if strings.Contains(entrys[i].Name(), DEFAULT_BACKUP_NAME) {
-// 			continue
-// 		}
-// 		name := strings.Split(entrys[i].Name(), "-")
-// 		index, err := strconv.Atoi(name[len(name)-1])
-// 		if err != nil {
-// 			return num, err
-// 		}
-// 		if index < start {
-// 			continue
-// 		}
-// 		files, err := readAccData(acc.FilePath, index)
-// 		if err != nil {
-// 			return num, err
-// 		}
-// 		num += int64(len(files.Values))
-// 	}
-
-// 	return num, nil
-// }
 
 // Accumulator validation interface
 
