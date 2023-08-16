@@ -188,14 +188,18 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 		Rear:  rear,
 		Front: front,
 	}
-	var err error
-	p.chainState.Acc, err = acc.Recovery(AccPath, key, front, rear)
-	if err != nil {
-		return errors.Wrap(err, "recovery chain state error")
-	}
-	if !bytes.Equal(accSnp, p.chainState.Acc.GetSnapshot().Accs.Value) {
-		err = errors.New("the restored acc value is not equal to the snapshot value")
-		return errors.Wrap(err, "recovery chain state error")
+	if front != p.front || rear != p.rear || !bytes.Equal(accSnp, p.AccManager.GetSnapshot().Accs.Value) {
+		var err error
+		p.chainState.Acc, err = acc.Recovery(AccPath, key, front, rear)
+		if err != nil {
+			return errors.Wrap(err, "recovery chain state error")
+		}
+		if !bytes.Equal(accSnp, p.chainState.Acc.GetSnapshot().Accs.Value) {
+			err = errors.New("the restored acc value is not equal to the snapshot value")
+			return errors.Wrap(err, "recovery chain state error")
+		}
+	} else {
+		p.chainState.Acc = p.AccManager.GetSnapshot()
 	}
 	p.chainState.delCh = make(chan struct{})
 	p.chainState.challenging = true

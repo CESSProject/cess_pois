@@ -318,6 +318,45 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 	acc.updateAcc(acc.Accs)
 }
 
+// addSubAccBybatch inserts the sub acc built with new elements into the multilevel accumulator,
+// However, the lazy update mechanism is adopted, and the final update is performed after the accumulator is built.
+func (acc *MutiLevelAcc) addSubAccBybatch(subAcc *AccNode) {
+	//acc.CurrCount will be equal to zero when the accumulator is empty
+	if acc.CurrCount == 0 {
+		acc.Curr = subAcc
+		acc.CurrCount = acc.Curr.Len
+		acc.Curr.Wit = acc.Key.G.Bytes()
+		acc.Parent = &AccNode{
+			Children: []*AccNode{subAcc},
+			Len:      1,
+		}
+		acc.Accs = &AccNode{
+			Children: []*AccNode{acc.Parent},
+			Len:      1,
+		}
+		acc.ElemNums += acc.CurrCount
+		return
+	}
+	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
+	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
+		acc.ElemNums += subAcc.Len - acc.CurrCount
+		lens := len(acc.Parent.Children)
+		acc.Parent.Children[lens-1] = subAcc
+	} else if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
+		acc.ElemNums += subAcc.Len
+		acc.Parent.Children = append(acc.Parent.Children, subAcc)
+	} else {
+		acc.ElemNums += subAcc.Len
+		node := &AccNode{
+			Children: []*AccNode{subAcc},
+		}
+		acc.Accs.Children = append(acc.Accs.Children, node)
+		acc.Parent = node
+	}
+	acc.Curr = subAcc
+	acc.CurrCount = acc.Curr.Len
+}
+
 func (acc *MutiLevelAcc) DeleteElements(num int) error {
 
 	index := acc.Deleted / DEFAULT_ELEMS_NUM
@@ -577,11 +616,17 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 			acc.Key, acc.Key.G.Bytes(),
 			backup.Values,
 		)
-		acc.addSubAcc(node)
+		acc.addSubAccBybatch(node)
 		if i == 0 && offset > 0 {
 			acc.CurrCount += acc.Deleted % DEFAULT_ELEMS_NUM
 		}
 	}
+
+	//update the upper accumulator and its evidence
+	for i := 0; i < acc.Accs.Len; i++ {
+		acc.updateAcc(acc.Accs.Children[i])
+	}
+	acc.updateAcc(acc.Accs)
 	return nil
 }
 
