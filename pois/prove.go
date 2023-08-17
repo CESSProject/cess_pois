@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"math/big"
 	"os"
 	"path"
 	"strconv"
@@ -188,13 +189,16 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 		Rear:  rear,
 		Front: front,
 	}
-	if front != p.front || rear != p.rear || !bytes.Equal(accSnp, p.AccManager.GetSnapshot().Accs.Value) {
+	chainAcc := big.NewInt(0).SetBytes(accSnp)
+	if front != p.front || rear != p.rear || !bytes.Equal(chainAcc.Bytes(), p.AccManager.GetSnapshot().Accs.Value) {
 		var err error
 		p.chainState.Acc, err = acc.Recovery(AccPath, key, front, rear)
 		if err != nil {
 			return errors.Wrap(err, "recovery chain state error")
 		}
-		if !bytes.Equal(accSnp, p.chainState.Acc.GetSnapshot().Accs.Value) {
+
+		localAcc := big.NewInt(0).SetBytes(p.chainState.Acc.GetSnapshot().Accs.Value)
+		if chainAcc.Cmp(localAcc) != 0 {
 			err = errors.New("the restored acc value is not equal to the snapshot value")
 			return errors.Wrap(err, "recovery chain state error")
 		}
