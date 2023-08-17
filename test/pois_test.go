@@ -15,12 +15,12 @@ import (
 func TestPois(t *testing.T) {
 	//Initialize the execution environment
 	k, n, d := int64(8), int64(16*1024), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("parse key error", err)
-	}
-	// key := acc.RsaKeygen(2048)
-	// err := SaveKey("./key", key)
+	// key, err := ParseKey("./key")
+	// if err != nil {
+	// 	t.Fatal("parse key error", err)
+	// }
+	key := acc.RsaKeygen(2048)
+	// //err := SaveKey("./key", key)
 	// if err != nil {
 	// 	t.Fatal("save key error", err)
 	// }
@@ -28,18 +28,11 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 48, 1792, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
-
-	// //test recovery chain state
-	// err = prover.RecoveryChainState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
-	// if err != nil {
-	// 	t.Fatal("recovery chain state error", err)
-	// }
-
 	verifier := pois.NewVerifier(k, n, d)
 
 	ts := time.Now()
@@ -59,7 +52,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 48, 1792)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 	t.Log("acc value1", prover.AccManager.GetSnapshot().Accs.Value)
 	//verifier receive commits
 	ts = time.Now()
@@ -122,11 +115,11 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 48, 1792+256)
+	err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
-	spaceProof, err := prover.ProveSpace(spaceChals, 1+48, 1792+256)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 256)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -142,23 +135,12 @@ func TestPois(t *testing.T) {
 	prover.RestChallengeState()
 	// //deletion proof
 	ts = time.Now()
-	chProof, Err := prover.ProveDeletion(24)
-	var delProof *pois.DeletionProof
-	select {
-	case err = <-Err:
+	delProof, err := prover.ProveDeletion(24)
+
+	if err != nil {
 		t.Fatal("prove deletion proof error", err)
-	case delProof = <-chProof:
-		break
 	}
 	t.Log("prove deletion proof time", time.Since(ts))
-
-	if delProof == nil && err == nil {
-		t.Log("no need to prove deletion proof.")
-		return
-	} else if err != nil {
-		t.Fatal("prove deletion proof error", err)
-	}
-
 	//verify deletion proof
 	ts = time.Now()
 	err = verifier.VerifyDeletion(prover.ID, delProof)

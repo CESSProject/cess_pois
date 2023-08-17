@@ -748,54 +748,42 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 }
 
 // ProveDeletion sort out num*IdleFileSize(unit MiB) available space,
-// it subtracts all unused and uncommitted space, and deletes enough idle files to make room,
-// so the number of idle files actually deleted is the length of DeletionProof.Roots,
 // you need to update prover status with this value rather than num after the verification is successful.
-func (p *Prover) ProveDeletion(num int64) (chan *DeletionProof, chan error) {
-	ch := make(chan *DeletionProof, 1)
-	Err := make(chan error, 1)
+func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 	if num <= 0 {
 		err := errors.New("bad file number")
-		Err <- errors.Wrap(err, "prove deletion error")
-		return ch, Err
+		return nil, errors.Wrap(err, "prove deletion error")
 	}
-	go func() {
-		p.delete.Store(true)
-		p.rw.Lock()
-		if p.rear-p.front < num {
-			p.rw.Unlock()
-			ch <- nil
-			err := errors.New("insufficient operating space")
-			Err <- errors.Wrap(err, "prove deletion error")
-			return
-		}
+	p.delete.Store(true)
+	p.rw.Lock()
+	if p.rear-p.front < num {
 		p.rw.Unlock()
-		data := p.Expanders.FilePool.Get().(*[]byte)
-		defer p.Expanders.FilePool.Put(data)
-		roots := make([][]byte, num)
-		for i := int64(1); i <= num; i++ {
-			cluster, subfile := (p.front+i-1)/p.clusterSize+1, (p.front+i-1)%p.clusterSize
-			if err := p.ReadFileLabels(cluster, subfile, *data); err != nil {
-				Err <- errors.Wrap(err, "prove deletion error")
-				return
-			}
-			mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-			roots[i-1] = mht.GetRoot(expanders.HashSize)
-			tree.RecycleMht(mht)
+		err := errors.New("insufficient operating space")
+		return nil, errors.Wrap(err, "prove deletion error")
+	}
+	p.rw.Unlock()
+	data := p.Expanders.FilePool.Get().(*[]byte)
+	defer p.Expanders.FilePool.Put(data)
+	roots := make([][]byte, num)
+	for i := int64(1); i <= num; i++ {
+		cluster, subfile := (p.front+i-1)/p.clusterSize+1, (p.front+i-1)%p.clusterSize
+		if err := p.ReadFileLabels(cluster, subfile, *data); err != nil {
+			return nil, errors.Wrap(err, "prove deletion error")
 		}
-		wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
-		if err != nil {
-			Err <- errors.Wrap(err, "prove deletion error")
-			return
-		}
-		proof := &DeletionProof{
-			Roots:    roots,
-			WitChain: wits,
-			AccPath:  accs,
-		}
-		ch <- proof
-	}()
-	return ch, Err
+		mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
+		roots[i-1] = mht.GetRoot(expanders.HashSize)
+		tree.RecycleMht(mht)
+	}
+	wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
+	if err != nil {
+		return nil, errors.Wrap(err, "prove deletion error")
+	}
+	proof := &DeletionProof{
+		Roots:    roots,
+		WitChain: wits,
+		AccPath:  accs,
+	}
+	return proof, nil
 }
 
 func (p *Prover) organizeFiles(num int64) error {

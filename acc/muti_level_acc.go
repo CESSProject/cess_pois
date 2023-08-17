@@ -509,7 +509,7 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 
 	acc.isDel.Store(true)
 	for !acc.setUpdate(true) {
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second)
 	}
 	acc.isDel.Store(false)
 	defer acc.setUpdate(false)
@@ -544,7 +544,7 @@ func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]
 	exist := &WitnessNode{Elem: snapshot.Accs.Value}
 
 	for acc.isDel.Load() || !acc.setUpdate(true) {
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second)
 	}
 	defer acc.setUpdate(false)
 
