@@ -458,5 +458,6 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
 	pNode.Front += int64(lens)
+	pNode.Acc = proof.AccPath[len(proof.AccPath)-1]
 	return nil
 }

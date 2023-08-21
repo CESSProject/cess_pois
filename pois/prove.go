@@ -162,8 +162,8 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 	p.generated = rear + generated //generated files do not need to be generated again
 	p.added = rear + generated     //the file index to be generated should be consistent with the generated file index firstly
 	p.commited = rear
-	p.space -= (p.rear - p.front) * FileSize                //calc proved space
-	p.space -= generated * (FileSize * (p.Expanders.K + 1)) //calc generated space
+	p.space -= (p.rear - p.front) * FileSize                                          //calc proved space
+	p.space -= generated / p.clusterSize * (p.clusterSize + p.Expanders.K) * FileSize //calc generated space
 	return nil
 }
 
@@ -227,6 +227,7 @@ func (p *Prover) GenerateIdleFileSet() error {
 	if err := p.Expanders.GenerateIdleFileSet(
 		p.ID, start, p.setLen, IdleFilePath); err != nil {
 		// clean files
+		p.added -= fileNum
 		p.space += (fileNum + p.setLen*p.Expanders.K) * FileSize
 		return errors.Wrap(err, "generate idle file set error")
 	}
@@ -268,6 +269,7 @@ func (p *Prover) GenerateIdleFileSets(tNum int) error {
 	}
 	wg.Wait()
 	if err != nil {
+		p.added -= fileNum * int64(tNum)
 		p.space += (fileNum + p.setLen*p.Expanders.K) * FileSize * int64(tNum)
 		return errors.Wrap(err, "generate idle file sets error")
 	}
@@ -809,7 +811,7 @@ func (p *Prover) organizeFiles(num int64) error {
 	if err := util.DeleteFile(name); err != nil {
 		return err
 	}
-	p.space += num * p.Expanders.K * FileSize
+	p.space += num / p.clusterSize * p.Expanders.K * FileSize
 	return nil
 }
 
