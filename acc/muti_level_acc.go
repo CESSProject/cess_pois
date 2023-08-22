@@ -453,9 +453,16 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if index <= int64(acc.Deleted) || index > int64(acc.Deleted+acc.ElemNums) {
 		return nil, errors.New("bad index")
 	}
-	data, err := readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
+	var (
+		data *AccData
+		err  error
+	)
+	data, err = readBackup(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
 	if err != nil {
-		return nil, err
+		data, err = readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
+		if err != nil {
+			return nil, err
+		}
 	}
 	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
 	index -= int64(acc.Deleted - acc.Deleted%DEFAULT_ELEMS_NUM)
