@@ -1,7 +1,6 @@
 package pois
 
 import (
-	"bytes"
 	"fmt"
 	"io/ioutil"
 	"math/big"
@@ -24,6 +23,7 @@ import (
 var (
 	FileSize       int64  = int64(expanders.HashSize)
 	AccPath        string = acc.DEFAULT_PATH
+	ChallAccPath   string = "./chall_acc/"
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 4 //please set according to the number of cores
 	SpaceFullError        = errors.New("generate idle file set error: not enough space")
@@ -48,6 +48,7 @@ type Prover struct {
 
 type Config struct {
 	AccPath        string
+	ChallAccPath   string
 	IdleFilePath   string
 	MaxProofThread int
 }
@@ -132,6 +133,10 @@ func (p *Prover) Init(key acc.RsaKey, config Config) error {
 	if err != nil {
 		return errors.Wrap(err, "init prover error")
 	}
+	_, err = acc.NewMutiLevelAcc(ChallAccPath, key)
+	if err != nil {
+		return errors.Wrap(err, "init prover error")
+	}
 	return nil
 }
 
@@ -164,6 +169,13 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 	p.commited = rear
 	p.space -= (p.rear - p.front) * FileSize                                          //calc proved space
 	p.space -= generated / p.clusterSize * (p.clusterSize + p.Expanders.K) * FileSize //calc generated space
+
+	//backup acc file for challenge
+	err = util.CopyFiles(AccPath, ChallAccPath)
+	if err != nil {
+		return errors.Wrap(err, "recovery prover error")
+	}
+
 	return nil
 }
 
@@ -178,6 +190,9 @@ func checkConfig(config Config) {
 		MaxProofThread != config.MaxProofThread {
 		MaxProofThread = config.MaxProofThread
 	}
+	if config.ChallAccPath != "" && config.ChallAccPath != AccPath {
+		ChallAccPath = config.ChallAccPath
+	}
 }
 
 func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear int64) error {
@@ -190,20 +205,17 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 		Front: front,
 	}
 	chainAcc := big.NewInt(0).SetBytes(accSnp)
-	if front != p.front || rear != p.rear || !bytes.Equal(chainAcc.Bytes(), p.AccManager.GetSnapshot().Accs.Value) {
-		var err error
-		p.chainState.Acc, err = acc.Recovery(AccPath, key, front, rear)
-		if err != nil {
-			return errors.Wrap(err, "recovery chain state error")
-		}
 
-		localAcc := big.NewInt(0).SetBytes(p.chainState.Acc.GetSnapshot().Accs.Value)
-		if chainAcc.Cmp(localAcc) != 0 {
-			err = errors.New("the restored acc value is not equal to the snapshot value")
-			return errors.Wrap(err, "recovery chain state error")
-		}
-	} else {
-		p.chainState.Acc = p.AccManager.GetSnapshot()
+	var err error
+	p.chainState.Acc, err = acc.Recovery(ChallAccPath, key, front, rear)
+	if err != nil {
+		return errors.Wrap(err, "recovery chain state error")
+	}
+
+	localAcc := big.NewInt(0).SetBytes(p.chainState.Acc.GetSnapshot().Accs.Value)
+	if chainAcc.Cmp(localAcc) != 0 {
+		err = errors.New("the restored acc value is not equal to the snapshot value")
+		return errors.Wrap(err, "recovery chain state error")
 	}
 	p.chainState.delCh = make(chan struct{})
 	p.chainState.challenging = true
@@ -289,6 +301,8 @@ func (p *Prover) CommitRollback() bool {
 // AccRollback need to be invoked when submit or verify acc proof failure,
 // the update of the accumulator is serial and blocking, you need to update or roll back in time.
 func (p *Prover) AccRollback(isDel bool) bool {
+	p.rw.Lock()
+	defer p.rw.Unlock()
 	if isDel {
 		if !p.delete.CompareAndSwap(true, false) {
 			return false
@@ -318,22 +332,26 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 		}
 		p.rw.Lock()
 		p.front += num
+		p.AccManager.UpdateSnapshot()
 		p.rw.Unlock()
-	} else {
 
-		if !p.update.CompareAndSwap(true, false) {
-			err = errors.New("no update task pending update")
-			return errors.Wrap(err, "updat prover status error")
+		err = acc.CleanBackup(AccPath, int((p.front-1)/acc.DEFAULT_ELEMS_NUM))
+		if err != nil {
+			return errors.Wrap(err, "delete idle files error")
 		}
+		return nil
+	}
 
-		if err = p.organizeFiles(num); err != nil {
-			return errors.Wrap(err, "updat prover status error")
-		}
-		p.rw.Lock()
-		p.rear += num
-		p.rw.Unlock()
+	if !p.update.CompareAndSwap(true, false) {
+		err = errors.New("no update task pending update")
+		return errors.Wrap(err, "updat prover status error")
+	}
+
+	if err = p.organizeFiles(num); err != nil {
+		return errors.Wrap(err, "updat prover status error")
 	}
 	p.rw.Lock()
+	p.rear += num
 	p.AccManager.UpdateSnapshot()
 	p.rw.Unlock()
 	return nil
@@ -392,6 +410,10 @@ func (p *Prover) RestChallengeState() {
 	p.proofed = 0
 	p.chainState.delCh = nil
 	p.chainState.challenging = false
+	if p.chainState.Front >= acc.DEFAULT_ELEMS_NUM {
+		index := (p.chainState.Front - acc.DEFAULT_ELEMS_NUM) / acc.DEFAULT_ELEMS_NUM
+		acc.DeleteAccData(ChallAccPath, int(index))
+	}
 }
 
 // GetIdleFileSetCommits can not run concurrently! And num must be consistent with the data given by CESS.
@@ -442,6 +464,14 @@ func (p *Prover) ProveCommitAndAcc(challenges [][]int64) ([][]CommitProof, *AccP
 	if err != nil {
 		return nil, nil, err
 	}
+
+	//copy new acc data to challenging acc path
+	index := int(p.rear) / acc.DEFAULT_ELEMS_NUM
+	err = acc.BackupAccDataForChall(AccPath, ChallAccPath, index)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return commitProofs, accProof, nil
 }
 
@@ -832,12 +862,6 @@ func (p *Prover) DeleteFiles() error {
 	if err != nil {
 		return errors.Wrap(err, "delete idle files error")
 	}
-
-	err = acc.CleanBackup(AccPath, int((p.front-1)/acc.DEFAULT_ELEMS_NUM))
-	if err != nil {
-		return errors.Wrap(err, "delete idle files error")
-	}
-
 	return nil
 }
 

@@ -24,11 +24,11 @@ func TestPois(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal("save key error", err)
 	// }
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*4, 32)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*8, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 768, pois.Config{})
+	err = prover.Recovery(key, 256, 512, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
@@ -52,7 +52,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 768)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 256, 512)
 	//acc := prover.AccManager.GetSnapshot().Accs.Value
 	t.Log("acc value1", prover.AccManager.GetSnapshot().Accs.Value)
 	//verifier receive commits
@@ -106,37 +106,23 @@ func TestPois(t *testing.T) {
 		t.Fatal("update status error", err)
 	}
 	t.Log("update prover status time", time.Since(ts))
-	// // //deletion proof
-	// ts = time.Now()
-	// delProof, err := prover.ProveDeletion(8)
+	// //deletion proof
+	ts = time.Now()
+	delProof, err := prover.ProveDeletion(248)
 
-	// if err != nil {
-	// 	t.Fatal("prove deletion proof error", err)
-	// }
-	// t.Log("prove deletion proof time", time.Since(ts))
-	// //verify deletion proof
-	// ts = time.Now()
-	// err = verifier.VerifyDeletion(prover.ID, delProof)
-	// if err != nil {
-	// 	t.Fatal("verify deletion proof error", err)
-	// }
-	// t.Log("verify deletion proof time", time.Since(ts))
-	// //add file to count
-	// ts = time.Now()
-	// err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
-	// if err != nil {
-	// 	t.Fatal("update count error", err)
-	// }
-	// t.Log("update prover status time", time.Since(ts))
+	if err != nil {
+		t.Fatal("prove deletion proof error", err)
+	}
+	t.Log("prove deletion proof time", time.Since(ts))
 
-	// ts = time.Now()
-	// err = prover.DeleteFiles()
-	// if err != nil {
-	// 	t.Fatal("delete files error", err)
-	// }
-	// t.Log("delete files time", time.Since(ts))
+	ts = time.Now()
+	//set space challenge state
+	err = prover.SetChallengeState(key, verifier.GetNode(prover.ID).Acc, 256, 768)
+	if err != nil {
+		t.Fatal("set challenge state error", err)
+	}
+	t.Log("set challenge state time", time.Since(ts))
 
-	//generate space challenges
 	ts = time.Now()
 	spaceChals, err := verifier.SpaceChallenges(8)
 	if err != nil {
@@ -146,11 +132,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	err = prover.SetChallengeState(key, verifier.GetNode(prover.ID).Acc, 0, 1024)
-	if err != nil {
-		t.Fatal("set challenge state error", err)
-	}
-	spaceProof, err := prover.ProveSpace(spaceChals, 1, 1025)
+	spaceProof, err := prover.ProveSpace(spaceChals, 257, 513)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -164,6 +146,31 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("verify space proof time", time.Since(ts))
 	prover.RestChallengeState()
+
+	//verify deletion proof
+	ts = time.Now()
+	err = verifier.VerifyDeletion(prover.ID, delProof)
+	if err != nil {
+		t.Fatal("verify deletion proof error", err)
+	}
+	t.Log("verify deletion proof time", time.Since(ts))
+
+	//add file to count
+	ts = time.Now()
+	err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
+	if err != nil {
+		t.Fatal("update count error", err)
+	}
+	t.Log("update prover status time", time.Since(ts))
+
+	// ts = time.Now()
+	// err = prover.DeleteFiles()
+	// if err != nil {
+	// 	t.Fatal("delete files error", err)
+	// }
+	// t.Log("delete files time", time.Since(ts))
+
+	//generate space challenges
 }
 
 func ToBytes(key acc.RsaKey) []byte {

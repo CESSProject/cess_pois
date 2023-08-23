@@ -392,7 +392,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 			[][]byte{data.Values[len-1]})
 	} else {
 
-		if err = deleteAccData(acc.FilePath, index); err != nil {
+		if err = DeleteAccData(acc.FilePath, index); err != nil {
 			return errors.Wrap(err, "delet elements error")
 		}
 
@@ -457,13 +457,12 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 		data *AccData
 		err  error
 	)
-	data, err = readBackup(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
+
+	data, err = readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
 	if err != nil {
-		data, err = readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
+
 	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
 	index -= int64(acc.Deleted - acc.Deleted%DEFAULT_ELEMS_NUM)
 	p := acc.Accs

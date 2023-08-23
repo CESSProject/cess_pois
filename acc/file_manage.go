@@ -3,7 +3,6 @@ package acc
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"strconv"
@@ -50,7 +49,7 @@ func readData(fpath string) (*AccData, error) {
 }
 
 // deleteAccData delete from the given index
-func deleteAccData(dir string, last int) error {
+func DeleteAccData(dir string, last int) error {
 	fs, err := os.ReadDir(dir)
 	if err != nil {
 		return errors.Wrap(err, "delete element data error")
@@ -77,18 +76,13 @@ func CleanBackup(dir string, index int) error {
 func backupAccData(dir string, index int) error {
 	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
 	backup := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_BACKUP_NAME, index))
-	bf, err := os.Create(backup)
-	if err != nil {
-		return errors.Wrap(err, "backup element data error")
-	}
-	defer bf.Close()
-	sf, err := os.Open(fpath)
-	if err != nil {
-		return errors.Wrap(err, "backup element data error")
-	}
-	defer sf.Close()
-	_, err = io.Copy(bf, sf)
-	return errors.Wrap(err, "backup element data error")
+	return errors.Wrap(util.CopyFile(fpath, backup), "backup element data error")
+}
+
+func BackupAccDataForChall(src, des string, index int) error {
+	fpath := path.Join(src, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
+	backup := path.Join(des, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
+	return errors.Wrap(util.CopyFile(fpath, backup), "backup acc data for challenge error")
 }
 
 func recoveryAccData(dir string, index int) error {
