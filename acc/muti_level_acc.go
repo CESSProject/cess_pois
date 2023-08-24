@@ -614,13 +614,18 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 		left, right := 0, len(backup.Values)
 		if i == 0 && DEFAULT_ELEMS_NUM-offset < right {
 			left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - right) //sub real file offset
+			backup.Values = backup.Values[left:right]
+			backup.Wits = generateWitness(acc.Key.G, acc.Key.N, backup.Values)
+			err = saveAccData(acc.FilePath, index, backup.Values, backup.Wits)
+			if err != nil {
+				return err
+			}
 		}
-		backup.Values = backup.Values[left:right]
 
 		node.Len = len(backup.Values)
 		node.Value = generateAcc(
-			acc.Key, acc.Key.G.Bytes(),
-			backup.Values,
+			acc.Key, backup.Wits[node.Len-1],
+			[][]byte{backup.Values[node.Len-1]},
 		)
 		acc.addSubAccBybatch(node)
 		if i == 0 && offset > 0 {

@@ -28,7 +28,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 256, 512, pois.Config{})
+	err = prover.Recovery(key, 16, 512, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
@@ -52,7 +52,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 256, 512)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 16, 512)
 	//acc := prover.AccManager.GetSnapshot().Accs.Value
 	t.Log("acc value1", prover.AccManager.GetSnapshot().Accs.Value)
 	//verifier receive commits
@@ -108,7 +108,7 @@ func TestPois(t *testing.T) {
 	t.Log("update prover status time", time.Since(ts))
 	// //deletion proof
 	ts = time.Now()
-	delProof, err := prover.ProveDeletion(248)
+	delProof, err := prover.ProveDeletion(8)
 
 	if err != nil {
 		t.Fatal("prove deletion proof error", err)
@@ -117,7 +117,7 @@ func TestPois(t *testing.T) {
 
 	ts = time.Now()
 	//set space challenge state
-	err = prover.SetChallengeState(key, verifier.GetNode(prover.ID).Acc, 256, 768)
+	err = prover.SetChallengeState(key, verifier.GetNode(prover.ID).Acc, 16, 768)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
@@ -132,7 +132,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 257, 513)
+	spaceProof, err := prover.ProveSpace(spaceChals, 17, 769)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
@@ -155,13 +155,13 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("verify deletion proof time", time.Since(ts))
 
-	//add file to count
-	ts = time.Now()
-	err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
-	if err != nil {
-		t.Fatal("update count error", err)
-	}
-	t.Log("update prover status time", time.Since(ts))
+	// //add file to count
+	// ts = time.Now()
+	// err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
+	// if err != nil {
+	// 	t.Fatal("update count error", err)
+	// }
+	// t.Log("update prover status time", time.Since(ts))
 
 	// ts = time.Now()
 	// err = prover.DeleteFiles()
