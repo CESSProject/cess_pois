@@ -389,7 +389,7 @@ func (p *Prover) CommitDataIsReady() bool {
 	defer p.rw.RUnlock()
 	fileNum := p.generated
 	commited := p.commited
-	return fileNum-commited > p.setLen*p.clusterSize
+	return fileNum-commited >= p.setLen*p.clusterSize
 }
 
 func (p *Prover) GetChainState() ChainState {
