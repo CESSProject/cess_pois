@@ -31,61 +31,37 @@ func InitMhtPool(eLen, hashSize int) {
 	}
 }
 
+func GetLightMhtFromPool() *LightMHT {
+	mht := pool.Get().(*LightMHT)
+	return mht
+}
+
+func PutLightMhtToPool(mht *LightMHT) {
+	if pool != nil {
+		pool.Put(mht)
+	}
+}
+
 // CalcLightMhtWithBytes calc light weight mht whit fixed size elements data
-func CalcLightMhtWithBytes(data []byte, size int, usePool bool) *LightMHT {
-	mht := new(LightMHT)
+func (mht *LightMHT) CalcLightMhtWithBytes(data []byte, size int) {
 	lens := len(data)
-	if lens%size != 0 {
-		return mht
-	}
-	if usePool && pool != nil {
-		mht = pool.Get().(*LightMHT)
-		if len(*mht) != lens {
-			*mht = make(LightMHT, lens)
-		}
-	} else {
-		*mht = make(LightMHT, lens)
-	}
 	hash := NewHash(size)
 	for i := 0; i < lens/size; i++ {
 		hash.Reset()
 		hash.Write(data[i*size : (i+1)*size])
 		copy((*mht)[i*size:(i+1)*size], hash.Sum(nil))
 	}
-	return calcLightMht(*mht, size)
+	calcLightMht(mht, size)
 }
 
-func CalcLightMhtWitElements(elems [][]byte, size int, usePool bool) *LightMHT {
-	mht := new(LightMHT)
-	lens := len(elems)
-	if lens%size != 0 {
-		return mht
-	}
-	if usePool && pool != nil {
-		mht = pool.Get().(*LightMHT)
-		if len(*mht) != lens*size {
-			*mht = make(LightMHT, lens*size)
-		}
-	} else {
-		*mht = make(LightMHT, lens*size)
-	}
-	hash := NewHash(size)
-	for i := 0; i < lens; i++ {
-		hash.Reset()
-		hash.Write(elems[i])
-		copy((*mht)[i*size:(i+1)*size], hash.Sum(nil))
-	}
-	return calcLightMht(*mht, size)
-}
-
-func calcLightMht(mht LightMHT, size int) *LightMHT {
-	lens := len(mht)
+func calcLightMht(mht *LightMHT, size int) *LightMHT {
+	lens := len(*mht)
 	p := lens / 2
-	src := mht[:]
+	src := (*mht)[:]
 	hash := NewHash(size)
 	for i := 0; i < int(math.Log2(float64(lens/size)))+1; i++ {
 		num := lens / (1 << (i + 1))
-		target := mht[p : p+num]
+		target := (*mht)[p : p+num]
 		for j, k := num/size-1, num*2/size-2; j >= 0 && k >= 0; j, k = j-1, k-2 {
 			hash.Reset()
 			hash.Write(src[k*size : (k+2)*size])
@@ -94,13 +70,7 @@ func calcLightMht(mht LightMHT, size int) *LightMHT {
 		p = p / 2
 		src = target
 	}
-	return &mht
-}
-
-func RecycleMht(mht *LightMHT) {
-	if pool != nil {
-		pool.Put(mht)
-	}
+	return mht
 }
 
 func (mht LightMHT) GetRoot(size int) []byte {

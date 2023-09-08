@@ -2,6 +2,7 @@ package acc
 
 import (
 	"bytes"
+	"crypto/rand"
 	"math"
 	"math/big"
 	"os"
@@ -436,33 +437,37 @@ func copyAccNode(src *AccNode, target *AccNode) {
 	}
 }
 
+// get witness chains for prove space challenge
 func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error) {
-	var err error
-	snapshot := acc.GetSnapshot()
-	chains := make([]*WitnessNode, len(indexs))
-	for i := 0; i < len(indexs); i++ {
-		chains[i], err = snapshot.getWitnessChain(indexs[i])
-		if err != nil {
-			return nil, errors.Wrap(err, "get witness chains error")
-		}
-	}
-	return chains, nil
-}
 
-func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
-	if index <= int64(acc.Deleted) || index > int64(acc.Deleted+acc.ElemNums) {
-		return nil, errors.New("bad index")
-	}
 	var (
 		data *AccData
 		err  error
 	)
+	snapshot := acc.GetSnapshot()
+	chains := make([]*WitnessNode, len(indexs))
+	fidx := int64(-1)
+	for i := 0; i < len(indexs); i++ {
+		if indexs[i] <= int64(acc.Deleted) || indexs[i] > int64(acc.Deleted+acc.ElemNums) {
+			return nil, errors.New("bad index")
+		}
+		if (indexs[i]-1)/DEFAULT_ELEMS_NUM > fidx {
+			fidx = (indexs[i] - 1) / DEFAULT_ELEMS_NUM
+			data, err = readAccData(acc.FilePath, int(fidx))
+			if err != nil {
+				return nil, err
+			}
+		}
+		chains[i], err = snapshot.getWitnessChain(indexs[i], data)
+		if err != nil {
+			return nil, errors.Wrap(err, "get witness chains error")
+		}
 
-	data, err = readAccData(acc.FilePath, int((index-1)/DEFAULT_ELEMS_NUM))
-	if err != nil {
-		return nil, err
 	}
+	return chains, nil
+}
 
+func (acc *MutiLevelAcc) getWitnessChain(index int64, data *AccData) (*WitnessNode, error) {
 	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
 	index -= int64(acc.Deleted - acc.Deleted%DEFAULT_ELEMS_NUM)
 	p := acc.Accs
@@ -498,7 +503,7 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 
 	if acc.ElemNums == 0 {
 		err := errors.New("delete null set")
-		return nil, nil, errors.Wrap(err, "proof acc delete error")
+		return nil, nil, errors.Wrap(err, "prove acc deletion proof error")
 	}
 	//Before deleting elements, get their chain of witness
 	exist := &WitnessNode{
@@ -522,7 +527,7 @@ func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte
 
 	err := acc.DeleteElements(num)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "proof acc delete error")
+		return nil, nil, errors.Wrap(err, "prove acc deletion proof error")
 	}
 	//computes the new accumulators generated after removing elements,
 	//when deleting element requires deleting an empty accumulator at the same time,
@@ -556,7 +561,7 @@ func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]
 
 	err := acc.AddElements(elems)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "proof acc insert error")
+		return nil, nil, errors.Wrap(err, "prove acc insertion proof")
 	}
 	//the proof of adding elements consists of two parts,
 	//the first part is the witness chain of the bottom accumulator where the element is located,
@@ -665,6 +670,28 @@ func VerifyMutilevelAcc(key RsaKey, wits *WitnessNode, acc []byte) bool {
 		return false
 	}
 	return bytes.Equal(wits.Elem, acc)
+}
+
+func VerifyMutilevelAccForBatch(key RsaKey, baseIdx int64, wits []*WitnessNode, acc []byte) bool {
+	var subAcc []byte
+	for i := 0; i < len(wits); i++ {
+		if subAcc != nil && !bytes.Equal(wits[i].Acc.Elem, subAcc) {
+			return false
+		}
+		if (int64(i)+baseIdx)%DEFAULT_ELEMS_NUM == 0 || i == len(wits)-1 {
+			if !VerifyMutilevelAcc(key, wits[i], acc) {
+				return false
+			}
+			subAcc = nil
+			continue
+		}
+		if r, _ := rand.Int(rand.Reader, new(big.Int).SetInt64(100)); r.Int64() < 50 &&
+			!VerifyAcc(key, wits[i].Acc.Elem, wits[i].Elem, wits[i].Wit) {
+			return false
+		}
+		subAcc = wits[i].Acc.Elem
+	}
+	return true
 }
 
 func VerifyInsertUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {

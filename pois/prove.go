@@ -83,6 +83,7 @@ type Commits struct {
 type CommitProof struct {
 	Node    *MhtProof   `json:"node"`
 	Parents []*MhtProof `json:"parents"`
+	Elders  []*MhtProof `json:"elders"`
 }
 
 type AccProof struct {
@@ -475,55 +476,6 @@ func (p *Prover) ProveCommitAndAcc(challenges [][]int64) ([][]CommitProof, *AccP
 	return commitProofs, accProof, nil
 }
 
-// ProveCommit prove commits no more than MaxCommitProofThread
-func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
-
-	var err error
-	lens := len(challenges)
-	proofSet := make([][]CommitProof, lens)
-	clusters := make([]int64, lens)
-	ch := make(chan struct {
-		idx   int
-		chals []int64
-	}, lens)
-
-	for i := 0; i < lens; i++ {
-		clusters[i] = challenges[i][0]
-		ch <- struct {
-			idx   int
-			chals []int64
-		}{i, challenges[i]}
-	}
-	close(ch)
-
-	if lens > MaxProofThread {
-		lens = MaxProofThread
-	}
-	wg := sync.WaitGroup{}
-	wg.Add(lens)
-	for i := 0; i < lens; i++ {
-		ants.Submit(func() {
-			defer wg.Done()
-			for c := range ch {
-				if c.chals == nil {
-					return
-				}
-				proofs, e := p.proveCommit(c.chals, clusters)
-				if e != nil {
-					err = e
-					return
-				}
-				proofSet[c.idx] = proofs
-			}
-		})
-	}
-	wg.Wait()
-	if err != nil {
-		return nil, errors.Wrap(err, "prove commits error")
-	}
-	return proofSet, errors.Wrap(err, "prove commits error")
-}
-
 func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 	var err error
 	if int64(len(challenges)) != p.setLen {
@@ -578,71 +530,137 @@ func (p *Prover) ReadFileLabels(cluster, fidx int64, buf []byte) error {
 	return nil
 }
 
-func (p *Prover) proveCommit(challenge []int64, clusters []int64) ([]CommitProof, error) {
+// ProveCommit prove commits no more than MaxCommitProofThread
+func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 
-	var err error
-	proofs := make([]CommitProof, len(challenge)-1)
-	fdir := path.Join(
-		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (challenge[0]-1)/p.setLen+1),
-		fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, challenge[0]),
+	var (
+		err      error
+		neighbor string
 	)
-	for i := int64(1); i <= int64(len(proofs)); i++ {
-		index := challenge[i]
-		if i > p.clusterSize+1 {
-			index = int64(proofs[i-2].Parents[challenge[i]].Index)
-		}
-		layer := index / p.Expanders.N
-		if i < p.clusterSize+1 {
-			layer = p.Expanders.K + i - 1
-		}
-		proofs[i-1], err = p.generateCommitProof(fdir, clusters, index, layer)
-		if err != nil {
-			return nil, errors.Wrap(err, "prove one file commit error")
-		}
+	lens := len(challenges)
+	proofSet := make([][]CommitProof, lens)
+	clusters := make([]int64, lens)
+
+	for i := 0; i < lens; i++ {
+		clusters[i] = challenges[i][0]
 	}
-	return proofs, nil
+
+	for i := 0; i < lens; i++ {
+		proofs := make([]CommitProof, len(challenges[i])-1)
+		fdir := path.Join(
+			IdleFilePath,
+			fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (challenges[i][0]-1)/p.setLen+1),
+			fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, challenges[i][0]),
+		)
+		for j := int64(1); j <= int64(len(proofs)); j++ {
+
+			index := challenges[i][j]
+			if j > p.clusterSize+1 {
+				index = int64(proofs[j-2].Parents[challenges[i][j]].Index)
+			}
+			layer := index / p.Expanders.N
+			if j < p.clusterSize+1 {
+				layer = p.Expanders.K + j - 1
+			}
+			if layer != 0 || i != 0 {
+				neighbor = path.Join(
+					IdleFilePath,
+					fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (challenges[i][0]-1)/p.setLen+1),
+					fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, p.setLen-(p.setLen-challenges[i][0]+1)%p.setLen),
+					fmt.Sprintf("%s-%d", expanders.FILE_NAME, layer-(p.setLen-int64(i))/p.setLen),
+				)
+			}
+			proofs[j-1], err = p.generateCommitProof(fdir, neighbor, clusters, index, layer)
+			if err != nil {
+				return nil, errors.Wrap(err, "prove commits error")
+			}
+		}
+		proofSet[i] = proofs
+	}
+	return proofSet, nil
 }
 
-func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int64) (CommitProof, error) {
+func (p *Prover) generatePathProof(mht *tree.LightMHT, data *[]byte, index, nodeIdx int64) (*MhtProof, error) {
+
+	mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
+	pathProof, err := mht.GetPathProof(*data, int(index), expanders.HashSize)
+	if err != nil {
+		return nil, errors.Wrap(err, "generate path proof error")
+	}
+	label := make([]byte, expanders.HashSize)
+	copy(label, (*data)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
+	return &MhtProof{
+		Index: expanders.NodeType(nodeIdx),
+		Label: label,
+		Paths: pathProof.Path,
+		Locs:  pathProof.Locs,
+	}, nil
+}
+
+func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, subfile int64) (CommitProof, error) {
 
 	if subfile < 0 || subfile > p.clusterSize+p.Expanders.K-1 {
 		return CommitProof{}, errors.New("generate commit proof error: bad node index")
 	}
 
-	fpath := path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, subfile))
 	data := p.Expanders.FilePool.Get().(*[]byte)
 	defer p.Expanders.FilePool.Put(data)
+	fpath := path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, subfile))
 	if err := util.ReadFileToBuf(fpath, *data); err != nil {
 		return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 	}
 
-	var nodeTree, parentTree *tree.LightMHT
+	nodeTree, parentTree := tree.GetLightMhtFromPool(), tree.GetLightMhtFromPool()
+	defer tree.PutLightMhtToPool(nodeTree)
+	defer tree.PutLightMhtToPool(parentTree)
 	index := c % p.Expanders.N
-	nodeTree = tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
-	defer tree.RecycleMht(nodeTree)
-	pathProof, err := nodeTree.GetPathProof(*data, int(index), expanders.HashSize)
+
+	pathProof, err := p.generatePathProof(nodeTree, data, index, c)
 	if err != nil {
 		return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 	}
-	label := make([]byte, expanders.HashSize)
-	copy(label, (*data)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
+
 	proof := CommitProof{
-		Node: &MhtProof{
-			Index: expanders.NodeType(c),
-			Label: label,
-			Paths: pathProof.Path,
-			Locs:  pathProof.Locs,
-		},
+		Node: pathProof,
+	}
+
+	pdata := p.Expanders.FilePool.Get().(*[]byte)
+	defer p.Expanders.FilePool.Put(pdata)
+
+	//add neighbor node dependency
+	proof.Elders = make([]*MhtProof, subfile/p.Expanders.K*p.Expanders.K/2+1)
+	if neighbor != "" {
+		if err := util.ReadFileToBuf(neighbor, *pdata); err != nil {
+			return CommitProof{}, errors.Wrap(err, "generate commit proof error")
+		}
+		proof.Elders[0], err = p.generatePathProof(parentTree, pdata, index, index)
+		if err != nil {
+			return CommitProof{}, errors.Wrap(err, "generate commit proof error")
+		}
 	}
 
 	if subfile == 0 {
 		return proof, nil
 	}
+
 	//file remapping
 	if subfile >= p.Expanders.K {
+
 		counts = append(counts, subfile-p.Expanders.K+1)
+		baseLayer := int((subfile - p.Expanders.K/2) / p.Expanders.K)
 		subfile = p.Expanders.K
+
+		//add elder node dependency
+		for i := 0; i < int(p.Expanders.K/2); i++ {
+			fpath := path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, baseLayer+i*2))
+			if err := util.ReadFileToBuf(fpath, *pdata); err != nil {
+				return CommitProof{}, errors.Wrap(err, "generate commit proof error")
+			}
+			proof.Elders[i+1], err = p.generatePathProof(parentTree, pdata, index, index+int64(baseLayer+i*2)*p.Expanders.N)
+			if err != nil {
+				return CommitProof{}, errors.Wrap(err, "generate commit proof error")
+			}
+		}
 	}
 
 	node := expanders.NewNode(expanders.NodeType(c))
@@ -650,15 +668,13 @@ func (p *Prover) generateCommitProof(fdir string, counts []int64, c, subfile int
 	expanders.CalcParents(p.Expanders, node, p.ID, counts...)
 
 	fpath = path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, subfile-1))
-	pdata := p.Expanders.FilePool.Get().(*[]byte)
-	defer p.Expanders.FilePool.Put(pdata)
+
 	err = util.ReadFileToBuf(fpath, *pdata)
 	if err != nil {
 		return proof, errors.Wrap(err, "generate commit proof error")
 	}
 
-	parentTree = tree.CalcLightMhtWithBytes(*pdata, expanders.HashSize, true)
-	defer tree.RecycleMht(parentTree)
+	parentTree.CalcLightMhtWithBytes(*pdata, expanders.HashSize)
 	lens := len(node.Parents)
 	parentProofs := make([]*MhtProof, lens)
 	wg := sync.WaitGroup{}
@@ -720,27 +736,30 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	if right-left < int64(threads) {
 		threads = int(right - left)
 	}
-	ch := make(chan int64, right-left)
-	for i := left; i < right; i++ {
-		ch <- i
+	if threads <= 0 {
+		threads = 2
 	}
-	close(ch)
+	block := int(right-left) / threads
+	for block*threads < int(right-left) {
+		block++
+	}
 	wg := sync.WaitGroup{}
 	wg.Add(threads)
 	for i := 0; i < threads; i++ {
+		gl, gr := left+int64(i*block), left+int64((i+1)*block)
+		if gr > right {
+			gr = right
+		}
 		ants.Submit(func() {
 			defer wg.Done()
-			data := p.Expanders.FilePool.Get().(*[]byte)
-			defer p.Expanders.FilePool.Put(data)
-			for fidx := range ch {
-				if fidx == 0 {
-					break
-				}
+			for fidx := gl; fidx < gr; fidx++ {
+				data := p.Expanders.FilePool.Get().(*[]byte)
 				err = p.ReadFileLabels((fidx-1)/p.clusterSize+1, (fidx-1)%p.clusterSize, *data)
 				if err != nil {
 					return
 				}
-				mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
+				mht := tree.GetLightMhtFromPool()
+				mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
 				indexs[fidx-left] = fidx
 				proof.Roots[fidx-left] = mht.GetRoot(expanders.HashSize)
 				proof.Proofs[fidx-left] = make([]*MhtProof, len(challenges))
@@ -761,7 +780,8 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 						Label: label,
 					}
 				}
-				tree.RecycleMht(mht)
+				tree.PutLightMhtToPool(mht)
+				p.Expanders.FilePool.Put(data)
 			}
 		})
 	}
@@ -769,6 +789,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
 	}
+
 	proof.WitChains, err = p.chainState.Acc.GetWitnessChains(indexs)
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
@@ -801,15 +822,16 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 	data := p.Expanders.FilePool.Get().(*[]byte)
 	defer p.Expanders.FilePool.Put(data)
 	roots := make([][]byte, num)
+	mht := tree.GetLightMhtFromPool()
 	for i := int64(1); i <= num; i++ {
 		cluster, subfile := (p.front+i-1)/p.clusterSize+1, (p.front+i-1)%p.clusterSize
 		if err := p.ReadFileLabels(cluster, subfile, *data); err != nil {
 			return nil, errors.Wrap(err, "prove deletion error")
 		}
-		mht := tree.CalcLightMhtWithBytes(*data, expanders.HashSize, true)
+		mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
 		roots[i-1] = mht.GetRoot(expanders.HashSize)
-		tree.RecycleMht(mht)
 	}
+	tree.PutLightMhtToPool(mht)
 	wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
 	if err != nil {
 		return nil, errors.Wrap(err, "prove deletion error")

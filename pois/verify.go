@@ -214,11 +214,12 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 
 	frontSize := int(unsafe.Sizeof(expanders.NodeType(0))) + len(ID) + 8 + 8
 	hashSize := expanders.HashSize
-	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize+int(IdleSetLen)*hashSize)
-	zero := make([]byte, int(v.Expanders.D+1)*hashSize+int(IdleSetLen)*hashSize)
+	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize+int(v.Expanders.K/2)*hashSize)
+	zero := make([]byte, int(v.Expanders.D+1)*hashSize+int(v.Expanders.K/2)*hashSize)
 
 	var (
 		idx  expanders.NodeType
+		fidx int64
 		hash []byte
 	)
 
@@ -255,19 +256,12 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 				return errors.Wrap(err, "verify commit proofs error")
 			}
 			//verify node label
-			if layer >= v.Expanders.K {
-				util.CopyData(label, ID,
-					expanders.GetBytes(chals[i][0]),
-					expanders.GetBytes((chals[i][0]-1)*ClusterSize+int64(j)),
-					expanders.GetBytes(idx),
-				)
-			} else {
-				util.CopyData(label, ID,
-					expanders.GetBytes(chals[i][0]),
-					expanders.GetBytes(int64(0)),
-					expanders.GetBytes(idx),
-				)
+			if fidx = 0; layer >= v.Expanders.K {
+				fidx = (chals[i][0]-1)*ClusterSize + int64(j)
 			}
+			util.CopyData(label, ID, expanders.GetBytes(chals[i][0]), expanders.GetBytes(fidx),
+				expanders.GetBytes(idx), zero)
+
 			if layer > 0 {
 				size := frontSize
 				logicalLayer := layer
@@ -292,13 +286,33 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 					size += hashSize
 				}
 				// add file dependencies
-				util.CopyData(label[size:], pNode.CommitsBuf.Roots[(layer-1)*IdleSetLen:layer*IdleSetLen]...)
-			} else {
-				util.CopyData(label[frontSize:], zero) //clean label rear
+				//util.CopyData(label[size:], pNode.CommitsBuf.Roots[(layer-1)*IdleSetLen:layer*IdleSetLen]...)
+				for l := 1; layer >= v.Expanders.K && l < len(proofs[i][j-1].Elders); l++ {
+					pathProof := tree.PathProof{
+						Locs: proofs[i][j-1].Elders[l].Locs,
+						Path: proofs[i][j-1].Elders[l].Paths,
+					}
+					ridx := ((layer-v.Expanders.K/2)/v.Expanders.K+2*int64(l-1))*IdleSetLen + (chals[i][0]-1)%IdleSetLen
+					if !tree.VerifyPathProof(pNode.CommitsBuf.Roots[ridx], proofs[i][j-1].Elders[l].Label, pathProof) {
+						err := errors.New("verify elder node path proof error")
+						return errors.Wrap(err, "verify commit proofs error")
+					}
+					copy(label[size:size+hashSize], proofs[i][j-1].Elders[l].Label)
+					size += hashSize
+				}
 			}
 
-			if (chals[i][0]-1)%IdleSetLen > 0 {
-				hash = expanders.GetHash(append(label, pNode.CommitsBuf.Roots[layer*IdleSetLen+(chals[i][0]-1)%IdleSetLen-1]...))
+			if (chals[i][0]-1)%IdleSetLen+layer > 0 {
+				pathProof := tree.PathProof{
+					Locs: proofs[i][j-1].Elders[0].Locs,
+					Path: proofs[i][j-1].Elders[0].Paths,
+				}
+				ridx := layer*IdleSetLen + (chals[i][0]-1)%IdleSetLen - 1
+				if !tree.VerifyPathProof(pNode.CommitsBuf.Roots[ridx], proofs[i][j-1].Elders[0].Label, pathProof) {
+					err := errors.New("verify neighbor node path proof error")
+					return errors.Wrap(err, "verify commit proofs error")
+				}
+				hash = expanders.GetHash(append(label, proofs[i][j-1].Elders[0].Label...))
 			} else {
 				hash = expanders.GetHash(label)
 			}
@@ -395,9 +409,7 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 		return errors.Wrap(err, "verify space proofs error")
 	}
 	label := make([]byte, len(pNode.ID)+8+expanders.HashSize)
-
 	for i := 0; i < len(proof.Roots); i++ {
-
 		for j := 0; j < len(chals); j++ {
 			if chals[j] != int64(proof.Proofs[i][j].Index) {
 				err := errors.New("bad file index")
@@ -424,11 +436,10 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 			err := errors.New("verify file label error")
 			return errors.Wrap(err, "verify space proofs error")
 		}
-
-		if !acc.VerifyMutilevelAcc(pNode.Key, proof.WitChains[i], pNode.Acc) {
-			err := errors.New("verify acc proof error")
-			return errors.Wrap(err, "verify space proofs error")
-		}
+	}
+	if !acc.VerifyMutilevelAccForBatch(pNode.Key, proof.Left, proof.WitChains, pNode.Acc) {
+		err := errors.New("verify acc proof error")
+		return errors.Wrap(err, "verify space proofs error")
 	}
 	return nil
 }
