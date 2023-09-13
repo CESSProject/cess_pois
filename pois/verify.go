@@ -203,7 +203,9 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 		err := errors.New("prover node not found")
 		return errors.Wrap(err, "verify commit proofs error")
 	}
-	if len(chals) != len(proofs) || len(chals) != int(IdleSetLen) {
+	if len(chals) != len(proofs) || len(chals) != int(IdleSetLen) ||
+		len(pNode.CommitsBuf.FileIndexs) != int(ClusterSize*IdleSetLen) ||
+		len(pNode.CommitsBuf.Roots) != int((v.Expanders.K+ClusterSize)*IdleSetLen+1) {
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify commit proofs error")
 	}

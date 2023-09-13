@@ -23,7 +23,7 @@ import (
 var (
 	FileSize       int64  = int64(expanders.HashSize)
 	AccPath        string = acc.DEFAULT_PATH
-	ChallAccPath   string = "./chall_acc/"
+	ChallAccPath   string = "./chall_acc/" //Do not match AccPath
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 4 //please set according to the number of cores
 	SpaceFullError        = errors.New("generate idle file set error: not enough space")
@@ -563,10 +563,14 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 				layer = p.Expanders.K + j - 1
 			}
 			if layer != 0 || i != 0 {
+				cid := challenges[i][0] - 1
+				if cid%p.setLen == 0 {
+					cid += p.setLen
+				}
 				neighbor = path.Join(
 					IdleFilePath,
 					fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (challenges[i][0]-1)/p.setLen+1),
-					fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, p.setLen-(p.setLen-challenges[i][0]+1)%p.setLen),
+					fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, cid),
 					fmt.Sprintf("%s-%d", expanders.FILE_NAME, layer-(p.setLen-int64(i))/p.setLen),
 				)
 			}
