@@ -3,6 +3,7 @@ package pois
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
 	"unsafe"
@@ -49,7 +50,7 @@ func NewVerifier(k, n, d int64) *Verifier {
 	}
 	SpaceChals = k
 	ClusterSize = k
-	tree.InitMhtPool(int(n), expanders.HashSize)
+	tree.InitMhtPool(int(n))
 	return verifier
 }
 
@@ -107,7 +108,6 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 	} else if !bytes.Equal(pNode.ID, ID) {
 		return false
 	}
-	hash := expanders.NewHash()
 	for i := 0; i < len(commits.FileIndexs); i++ {
 		if commits.FileIndexs[i] <= pNode.Rear { //
 			return false
@@ -119,7 +119,7 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 		return false
 	}
 	//
-	hash.Reset()
+	hash := sha256.New()
 	for j := 0; j < len(commits.Roots)-1; j++ {
 		hash.Write(commits.Roots[j])
 	}
@@ -378,7 +378,7 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify acc proofs error")
 	}
-	label := make([]byte, len(ID)+8+expanders.HashSize)
+	label := make([]byte, len(ID)+8+tree.DEFAULT_HASH_SIZE)
 	for i := int64(0); i < int64(len(chals)); i++ {
 		for j := int64(0); j < ClusterSize; j++ {
 			if proof.Indexs[i*ClusterSize+j] != (chals[i][0]-1)*ClusterSize+j+1 ||
@@ -410,7 +410,7 @@ func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpacePro
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify space proofs error")
 	}
-	label := make([]byte, len(pNode.ID)+8+expanders.HashSize)
+	label := make([]byte, len(pNode.ID)+8+tree.DEFAULT_HASH_SIZE)
 	for i := 0; i < len(proof.Roots); i++ {
 		for j := 0; j < len(chals); j++ {
 			if chals[j] != int64(proof.Proofs[i][j].Index) {
@@ -460,7 +460,7 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 	}
 	labels := make([][]byte, lens)
 	for i := 0; i < lens; i++ {
-		label := make([]byte, len(ID)+8+expanders.HashSize)
+		label := make([]byte, len(ID)+8+tree.DEFAULT_HASH_SIZE)
 		util.CopyData(label, ID,
 			expanders.GetBytes(pNode.Front+int64(i)+1), proof.Roots[i])
 		labels[i] = expanders.GetHash(label)

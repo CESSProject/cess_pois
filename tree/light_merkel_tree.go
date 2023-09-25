@@ -3,9 +3,7 @@ package tree
 import (
 	"bytes"
 	"crypto/sha256"
-	"crypto/sha512"
 	"errors"
-	"hash"
 	"math"
 	"sync"
 )
@@ -17,15 +15,20 @@ type PathProof struct {
 	Path [][]byte
 }
 
+const (
+	DEFAULT_HASH_SIZE = 32
+	DEFAULT_THREAD    = 4
+)
+
 var pool *sync.Pool
 
-func InitMhtPool(eLen, hashSize int) {
+func InitMhtPool(eLen int) {
 	if pool != nil {
 		return
 	}
 	pool = &sync.Pool{
 		New: func() interface{} {
-			mht := make(LightMHT, eLen*hashSize)
+			mht := make(LightMHT, eLen*DEFAULT_HASH_SIZE)
 			return &mht
 		},
 	}
@@ -44,21 +47,21 @@ func PutLightMhtToPool(mht *LightMHT) {
 
 // CalcLightMhtWithBytes calc light weight mht whit fixed size elements data
 func (mht *LightMHT) CalcLightMhtWithBytes(data []byte, size int) {
-	lens := len(data)
-	hash := NewHash(size)
-	for i := 0; i < lens/size; i++ {
+	hash := sha256.New()
+	for i := 0; i < len(data)/size; i++ {
 		hash.Reset()
 		hash.Write(data[i*size : (i+1)*size])
-		copy((*mht)[i*size:(i+1)*size], hash.Sum(nil))
+		copy((*mht)[i*DEFAULT_HASH_SIZE:(i+1)*DEFAULT_HASH_SIZE], hash.Sum(nil))
 	}
-	calcLightMht(mht, size)
+	calcLightMht(mht)
 }
 
-func calcLightMht(mht *LightMHT, size int) *LightMHT {
+func calcLightMht(mht *LightMHT) *LightMHT {
 	lens := len(*mht)
 	p := lens / 2
 	src := (*mht)[:]
-	hash := NewHash(size)
+	hash := sha256.New()
+	size := DEFAULT_HASH_SIZE
 	for i := 0; i < int(math.Log2(float64(lens/size)))+1; i++ {
 		num := lens / (1 << (i + 1))
 		target := (*mht)[p : p+num]
@@ -73,17 +76,17 @@ func calcLightMht(mht *LightMHT, size int) *LightMHT {
 	return mht
 }
 
-func (mht LightMHT) GetRoot(size int) []byte {
-	if len(mht) < size*2 {
+func (mht LightMHT) GetRoot() []byte {
+	if len(mht) < DEFAULT_HASH_SIZE*2 {
 		return nil
 	}
-	root := make([]byte, size)
-	copy(root, mht[size:size*2])
+	root := make([]byte, DEFAULT_HASH_SIZE)
+	copy(root, mht[DEFAULT_HASH_SIZE:DEFAULT_HASH_SIZE*2])
 	return root
 }
 
 func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error) {
-	if len(mht) != len(data) {
+	if len(mht)*2 != len(data) {
 		return PathProof{}, errors.New("error data")
 	}
 	lens := int(math.Log2(float64(len(data) / size)))
@@ -95,8 +98,8 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 		loc byte
 		d   []byte
 	)
-	hash := NewHash(size)
-	num, p := len(data), len(mht)
+
+	num, p := len(mht), len(mht)
 	for i := 0; i < lens; i++ {
 		if (index+1)%2 == 0 {
 			loc = 0
@@ -106,9 +109,10 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 			d = data[(index+1)*size : (index+2)*size]
 		}
 		if i == 0 {
-			hash.Reset()
+			hash := sha256.New()
 			hash.Write(d)
 			proof.Path[i] = hash.Sum(nil)
+			size = DEFAULT_HASH_SIZE
 		} else {
 			proof.Path[i] = make([]byte, size)
 			copy(proof.Path[i], d)
@@ -125,7 +129,7 @@ func VerifyPathProof(root, data []byte, proof PathProof) bool {
 	if len(proof.Locs) != len(proof.Path) {
 		return false
 	}
-	hash := NewHash(len(root))
+	hash := sha256.New()
 	hash.Write(data)
 	data = hash.Sum(nil)
 	if len(data) != len(root) {
@@ -155,15 +159,4 @@ func CheckIndexPath(index int64, locs []byte) bool {
 		index /= 2
 	}
 	return true
-}
-
-func NewHash(size int) hash.Hash {
-	switch size {
-	case 32:
-		return sha256.New()
-	case 64:
-		return sha512.New()
-	default:
-		return sha512.New()
-	}
 }

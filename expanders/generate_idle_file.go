@@ -128,12 +128,10 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 						bcount += HashSize
 					}
 				}
-
 				hash.Reset()
+				hash.Write(label)
 				if i+j > 0 { //add same layer dependency relationship
-					hash.Write(append(label, (*labels)[k*int64(HashSize):(k+1)*int64(HashSize)]...))
-				} else {
-					hash.Write(label)
+					hash.Write((*labels)[k*int64(HashSize) : (k+1)*int64(HashSize)])
 				}
 				copy((*labels)[k*int64(HashSize):(k+1)*int64(HashSize)], hash.Sum(nil))
 			}
@@ -141,7 +139,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 			//calc merkel tree root hash
 			mht := tree.GetLightMhtFromPool()
 			mht.CalcLightMhtWithBytes((*labels), HashSize)
-			roots[i*size+j] = mht.GetRoot(HashSize)
+			roots[i*size+j] = mht.GetRoot()
 			tree.PutLightMhtToPool(mht)
 
 			//save one layer labels of one file
@@ -161,7 +159,7 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 		expanders.FilePool.Put(elder[i])
 	}
 	//calculate new dir name
-	hash.Reset()
+	hash = sha256.New()
 	for i := 0; i < len(roots)-1; i++ {
 		hash.Write(roots[i])
 	}

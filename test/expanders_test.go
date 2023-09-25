@@ -12,7 +12,7 @@ import (
 
 func TestIdleFileSetGeneration(t *testing.T) {
 	ts := time.Now()
-	tree.InitMhtPool(1024*1024, expanders.HashSize)
+	tree.InitMhtPool(1024 * 1024)
 	graph := expanders.ConstructStackedExpanders(8, 1024*1024, 64)
 	t.Log("construct stacked expanders time", time.Since(ts))
 	ts = time.Now()
@@ -25,7 +25,7 @@ func TestIdleFileSetGeneration(t *testing.T) {
 
 func TestIdleFilesSetGenerationParallely(t *testing.T) {
 	ts := time.Now()
-	tree.InitMhtPool(1024*1024, expanders.HashSize)
+	tree.InitMhtPool(1024 * 1024)
 	graph := expanders.ConstructStackedExpanders(7, 1024*1024, 64)
 	t.Log("construct stacked expanders time", time.Since(ts))
 	ts = time.Now()

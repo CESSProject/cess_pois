@@ -120,7 +120,7 @@ func NewProver(k, n, d int64, ID []byte, space, setLen int64) (*Prover, error) {
 	prover.setLen = setLen
 	prover.clusterSize = k
 	prover.chainState = &ChainState{}
-	tree.InitMhtPool(int(n), expanders.HashSize)
+	tree.InitMhtPool(int(n))
 	return prover, nil
 }
 
@@ -441,7 +441,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 		expanders.COMMIT_FILE,
 	)
 	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1)
-	commits.Roots, err = util.ReadProofFile(name, rootNum, expanders.HashSize)
+	commits.Roots, err = util.ReadProofFile(name, rootNum, tree.DEFAULT_HASH_SIZE)
 	if err != nil {
 		return commits, errors.Wrap(err, "get commits error")
 	}
@@ -494,7 +494,7 @@ func (p *Prover) proveAcc(challenges [][]int64) (*AccProof, error) {
 		expanders.COMMIT_FILE,
 	)
 	roots, err := util.ReadProofFile(
-		fname, int(p.Expanders.K+p.clusterSize)*int(p.setLen)+1, expanders.HashSize)
+		fname, int(p.Expanders.K+p.clusterSize)*int(p.setLen)+1, tree.DEFAULT_HASH_SIZE)
 	if err != nil {
 		return nil, errors.Wrap(err, "update acc error")
 	}
@@ -765,7 +765,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 				mht := tree.GetLightMhtFromPool()
 				mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
 				indexs[fidx-left] = fidx
-				proof.Roots[fidx-left] = mht.GetRoot(expanders.HashSize)
+				proof.Roots[fidx-left] = mht.GetRoot()
 				proof.Proofs[fidx-left] = make([]*MhtProof, len(challenges))
 				for j := 0; j < len(challenges); j++ {
 					idx := int(challenges[j] % p.Expanders.N)
@@ -793,7 +793,6 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
 	}
-
 	proof.WitChains, err = p.chainState.Acc.GetWitnessChains(indexs)
 	if err != nil {
 		return nil, errors.Wrap(err, "prove space error")
@@ -833,7 +832,7 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 			return nil, errors.Wrap(err, "prove deletion error")
 		}
 		mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
-		roots[i-1] = mht.GetRoot(expanders.HashSize)
+		roots[i-1] = mht.GetRoot()
 	}
 	tree.PutLightMhtToPool(mht)
 	wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
