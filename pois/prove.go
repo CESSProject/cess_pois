@@ -347,14 +347,11 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 		err = errors.New("no update task pending update")
 		return errors.Wrap(err, "updat prover status error")
 	}
-
-	if err = p.organizeFiles(num); err != nil {
-		return errors.Wrap(err, "updat prover status error")
-	}
 	p.rw.Lock()
 	p.rear += num
 	p.AccManager.UpdateSnapshot()
 	p.rw.Unlock()
+	p.organizeFiles(num)
 	return nil
 }
 

@@ -108,6 +108,7 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 	} else if !bytes.Equal(pNode.ID, ID) {
 		return false
 	}
+
 	for i := 0; i < len(commits.FileIndexs); i++ {
 		if commits.FileIndexs[i] <= pNode.Rear { //
 			return false

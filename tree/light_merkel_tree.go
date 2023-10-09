@@ -3,7 +3,6 @@ package tree
 import (
 	"bytes"
 	"crypto/sha256"
-	"errors"
 	"math"
 	"sync"
 )
@@ -86,13 +85,14 @@ func (mht LightMHT) GetRoot() []byte {
 }
 
 func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error) {
-	if len(mht)*2 != len(data) {
-		return PathProof{}, errors.New("error data")
-	}
-	lens := int(math.Log2(float64(len(data) / size)))
+	return mht.getPathProof(data, index, size, false)
+}
+
+func (mht LightMHT) getPathProof(data []byte, index, size int, hashed bool) (PathProof, error) {
+	deep := int(math.Log2(float64(len(data) / size)))
 	proof := PathProof{
-		Locs: make([]byte, lens),
-		Path: make([][]byte, lens),
+		Locs: make([]byte, deep),
+		Path: make([][]byte, deep),
 	}
 	var (
 		loc byte
@@ -100,7 +100,7 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 	)
 
 	num, p := len(mht), len(mht)
-	for i := 0; i < lens; i++ {
+	for i := 0; i < deep; i++ {
 		if (index+1)%2 == 0 {
 			loc = 0
 			d = data[(index-1)*size : index*size]
@@ -108,7 +108,7 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 			loc = 1
 			d = data[(index+1)*size : (index+2)*size]
 		}
-		if i == 0 {
+		if i == 0 && (size != DEFAULT_HASH_SIZE || !hashed) {
 			hash := sha256.New()
 			hash.Write(d)
 			proof.Path[i] = hash.Sum(nil)
@@ -122,6 +122,37 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 		p -= num
 		data = mht[p : p+num]
 	}
+	return proof, nil
+}
+
+func GetPathProofWithAux(data, aux []byte, index, size int) (PathProof, error) {
+	proof := PathProof{}
+	auxSize := (len(aux) / DEFAULT_HASH_SIZE)
+	plateSize := len(data) / size / auxSize
+	mht := make(LightMHT, plateSize*DEFAULT_HASH_SIZE)
+	left := index / plateSize
+	data = data[left*plateSize*size : (left+1)*plateSize*size]
+	hash := sha256.New()
+	for i := 0; i < plateSize; i++ {
+		hash.Reset()
+		hash.Write(data[i*size : (i+1)*size])
+		copy(mht[i*DEFAULT_HASH_SIZE:(i+1)*DEFAULT_HASH_SIZE], hash.Sum(nil))
+	}
+	calcLightMht(&mht)
+
+	subProof, err := mht.getPathProof(data, index%plateSize, size, false)
+	if err != nil {
+		return proof, err
+	}
+	mht = make(LightMHT, len(aux))
+	copy(mht, aux)
+	calcLightMht(&mht)
+	topProof, err := mht.getPathProof(aux, left, DEFAULT_HASH_SIZE, true)
+	if err != nil {
+		return proof, err
+	}
+	proof.Locs = append(subProof.Locs, topProof.Locs...)
+	proof.Path = append(subProof.Path, topProof.Path...)
 	return proof, nil
 }
 
