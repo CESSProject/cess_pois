@@ -21,6 +21,8 @@ const (
 	COMMIT_FILE             = "file-roots"
 	CLUSTER_DIR_NAME        = "file-cluster"
 	SET_DIR_NAME            = "idle-files"
+	AUX_FILE                = "aux-file"
+	DEFAULT_AUX_SIZE        = 64
 )
 
 var (
@@ -140,7 +142,16 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 			mht := tree.GetLightMhtFromPool()
 			mht.CalcLightMhtWithBytes((*labels), HashSize)
 			roots[i*size+j] = mht.GetRoot()
+			aux := make([]byte, DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE)
+			copy(aux, (*mht)[DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE:2*DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE])
 			tree.PutLightMhtToPool(mht)
+
+			//save aux data
+			if err := util.SaveFile(path.Join(
+				setDir, fmt.Sprintf("%s-%d", CLUSTER_DIR_NAME, clusters[j]),
+				fmt.Sprintf("%s-%d", AUX_FILE, i)), aux); err != nil {
+				return errors.Wrap(err, "generate idle file error")
+			}
 
 			//save one layer labels of one file
 			if err := util.SaveFile(path.Join(

@@ -55,6 +55,11 @@ func (mht *LightMHT) CalcLightMhtWithBytes(data []byte, size int) {
 	calcLightMht(mht)
 }
 
+func (mht *LightMHT) CalcLightMhtWithAux(aux []byte) {
+	copy(*mht, aux)
+	calcLightMht(mht)
+}
+
 func calcLightMht(mht *LightMHT) *LightMHT {
 	lens := len(*mht)
 	p := lens / 2

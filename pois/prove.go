@@ -27,6 +27,7 @@ var (
 	IdleFilePath   string = expanders.DEFAULT_IDLE_FILES_PATH
 	MaxProofThread        = 4 //please set according to the number of cores
 	SpaceFullError        = errors.New("generate idle file set error: not enough space")
+	MiniFileSize   int64  = 1024 * 1024
 )
 
 type Prover struct {
@@ -351,7 +352,9 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 	p.rear += num
 	p.AccManager.UpdateSnapshot()
 	p.rw.Unlock()
-	p.organizeFiles(num)
+	if err := p.organizeFiles(num); err != nil {
+		return errors.Wrap(err, "updat prover status error")
+	}
 	return nil
 }
 
@@ -527,6 +530,19 @@ func (p *Prover) ReadFileLabels(cluster, fidx int64, buf []byte) error {
 	return nil
 }
 
+func (p *Prover) ReadAuxData(cluster, fidx int64, buf []byte) error {
+	name := path.Join(
+		IdleFilePath,
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, (cluster-1)/p.setLen+1),
+		fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, cluster),
+		fmt.Sprintf("%s-%d", expanders.AUX_FILE, fidx+p.Expanders.K),
+	)
+	if err := util.ReadFileToBuf(name, buf); err != nil {
+		return errors.Wrap(err, "read aux data error")
+	}
+	return nil
+}
+
 // ProveCommit prove commits no more than MaxCommitProofThread
 func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 
@@ -598,6 +614,21 @@ func (p *Prover) generatePathProof(mht *tree.LightMHT, data *[]byte, index, node
 	}, nil
 }
 
+func (p *Prover) getPathProofWithAux(aux []byte, data *[]byte, index, nodeIdx int64) (*MhtProof, error) {
+	pathProof, err := tree.GetPathProofWithAux(*data, aux, int(index), expanders.HashSize)
+	if err != nil {
+		return nil, errors.Wrap(err, "get path proof with aux error")
+	}
+	label := make([]byte, expanders.HashSize)
+	copy(label, (*data)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
+	return &MhtProof{
+		Index: expanders.NodeType(nodeIdx),
+		Label: label,
+		Paths: pathProof.Path,
+		Locs:  pathProof.Locs,
+	}, nil
+}
+
 func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, subfile int64) (CommitProof, error) {
 
 	if subfile < 0 || subfile > p.clusterSize+p.Expanders.K-1 {
@@ -628,13 +659,21 @@ func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, s
 	pdata := p.Expanders.FilePool.Get().(*[]byte)
 	defer p.Expanders.FilePool.Put(pdata)
 
+	aux := make([]byte, expanders.DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE)
+
 	//add neighbor node dependency
 	proof.Elders = make([]*MhtProof, subfile/p.Expanders.K*p.Expanders.K/2+1)
 	if neighbor != "" {
 		if err := util.ReadFileToBuf(neighbor, *pdata); err != nil {
 			return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 		}
-		proof.Elders[0], err = p.generatePathProof(parentTree, pdata, index, index)
+		if err := util.ReadFileToBuf(
+			strings.Replace(neighbor, expanders.FILE_NAME, expanders.AUX_FILE, 1), aux,
+		); err != nil {
+			return CommitProof{}, errors.Wrap(err, "generate commit proof error")
+		}
+
+		proof.Elders[0], err = p.getPathProofWithAux(aux, pdata, index, index)
 		if err != nil {
 			return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 		}
@@ -654,10 +693,14 @@ func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, s
 		//add elder node dependency
 		for i := 0; i < int(p.Expanders.K/2); i++ {
 			fpath := path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, baseLayer+i*2))
+			aPath := path.Join(fdir, fmt.Sprintf("%s-%d", expanders.AUX_FILE, baseLayer+i*2))
 			if err := util.ReadFileToBuf(fpath, *pdata); err != nil {
 				return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 			}
-			proof.Elders[i+1], err = p.generatePathProof(parentTree, pdata, index, index+int64(baseLayer+i*2)*p.Expanders.N)
+			if err := util.ReadFileToBuf(aPath, aux); err != nil {
+				return CommitProof{}, errors.Wrap(err, "generate commit proof error")
+			}
+			proof.Elders[i+1], err = p.getPathProofWithAux(aux, pdata, index, index+int64(baseLayer+i*2)*p.Expanders.N)
 			if err != nil {
 				return CommitProof{}, errors.Wrap(err, "generate commit proof error")
 			}
@@ -759,14 +802,19 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 				if err != nil {
 					return
 				}
-				mht := tree.GetLightMhtFromPool()
-				mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
+				aux := make([]byte, expanders.DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE)
+				err = p.ReadAuxData((fidx-1)/p.clusterSize+1, (fidx-1)%p.clusterSize, aux)
+				if err != nil {
+					return
+				}
+				mht := make(tree.LightMHT, len(aux))
+				mht.CalcLightMhtWithAux(aux)
 				indexs[fidx-left] = fidx
 				proof.Roots[fidx-left] = mht.GetRoot()
 				proof.Proofs[fidx-left] = make([]*MhtProof, len(challenges))
 				for j := 0; j < len(challenges); j++ {
 					idx := int(challenges[j] % p.Expanders.N)
-					pathProof, err := mht.GetPathProof(*data, idx, expanders.HashSize)
+					pathProof, err := tree.GetPathProofWithAux(*data, aux, idx, expanders.HashSize)
 					if err != nil {
 						if err != nil {
 							return
@@ -781,7 +829,6 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 						Label: label,
 					}
 				}
-				tree.PutLightMhtToPool(mht)
 				p.Expanders.FilePool.Put(data)
 			}
 		})
@@ -822,16 +869,19 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 	data := p.Expanders.FilePool.Get().(*[]byte)
 	defer p.Expanders.FilePool.Put(data)
 	roots := make([][]byte, num)
-	mht := tree.GetLightMhtFromPool()
+	aux := make([]byte, expanders.DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE)
+	mht := make(tree.LightMHT, len(aux))
 	for i := int64(1); i <= num; i++ {
 		cluster, subfile := (p.front+i-1)/p.clusterSize+1, (p.front+i-1)%p.clusterSize
 		if err := p.ReadFileLabels(cluster, subfile, *data); err != nil {
 			return nil, errors.Wrap(err, "prove deletion error")
 		}
-		mht.CalcLightMhtWithBytes(*data, expanders.HashSize)
+		if err := p.ReadAuxData(cluster, subfile, aux); err != nil {
+			return nil, errors.Wrap(err, "prove deletion error")
+		}
+		mht.CalcLightMhtWithAux(aux)
 		roots[i-1] = mht.GetRoot()
 	}
-	tree.PutLightMhtToPool(mht)
 	wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
 	if err != nil {
 		return nil, errors.Wrap(err, "prove deletion error")
@@ -845,15 +895,24 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 }
 
 func (p *Prover) organizeFiles(num int64) error {
+	idx := p.rear - num
 	dir := path.Join(
 		IdleFilePath,
-		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, p.rear/(p.clusterSize*p.setLen)+1),
+		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, idx/(p.clusterSize*p.setLen)+1),
 	)
-	for i := p.rear + 1; i <= p.rear+num; i += 8 {
+	for i := idx + 1; i <= idx+num; i += 8 {
 		for j := 0; j < int(p.Expanders.K); j++ {
+			// delete idle file
 			name := path.Join(dir,
 				fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
 				fmt.Sprintf("%s-%d", expanders.FILE_NAME, j))
+			if err := util.DeleteFile(name); err != nil {
+				return err
+			}
+			// delete aux file
+			name = path.Join(dir,
+				fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
+				fmt.Sprintf("%s-%d", expanders.AUX_FILE, j))
 			if err := util.DeleteFile(name); err != nil {
 				return err
 			}
@@ -932,10 +991,9 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 				return count, err
 			}
 			for _, file := range files {
-				if file.IsDir() {
-					continue
+				if !file.IsDir() && file.Size() >= MiniFileSize {
+					size += file.Size()
 				}
-				size += file.Size()
 			}
 			if size == fileTotalSize {
 				count += p.clusterSize
