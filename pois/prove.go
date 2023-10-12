@@ -347,9 +347,8 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 		return errors.Wrap(err, "updat prover status error")
 	}
 
-	if err = p.organizeFiles(num); err != nil {
-		return errors.Wrap(err, "updat prover status error")
-	}
+	p.organizeFiles(num)
+
 	p.rw.Lock()
 	p.rear += num
 	p.AccManager.UpdateSnapshot()
