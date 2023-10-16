@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"encoding/binary"
+	"log"
 	"math/big"
 	_ "net/http/pprof"
 	"testing"
@@ -16,7 +17,7 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
+	k, n, d := int64(8), int64(16*1024), int64(64)
 	key, err := ParseKey("./key")
 	if err != nil {
 		t.Fatal("parse key error", err)
@@ -211,7 +212,7 @@ func TestConcurrently(t *testing.T) {
 		for {
 			err := prover.GenerateIdleFileSet()
 			if err != nil {
-				t.Log("generate idle file set error", err)
+				log.Println("generate idle file set error", err)
 				return
 			}
 			time.Sleep(1 * time.Minute)
@@ -219,42 +220,47 @@ func TestConcurrently(t *testing.T) {
 	}()
 
 	go func() {
+		count := 0
 		for {
 			if !prover.CommitDataIsReady() {
 				continue
 			}
 			commits, err := prover.GetIdleFileSetCommits()
 			if err != nil {
-				t.Log("get commits error", err)
+				log.Println("get commits error", err)
 				return
 			}
 
 			if !verifier.ReceiveCommits(prover.ID, commits) {
-				t.Log("receive commits error")
+				log.Println("receive commits error")
 				return
 			}
 			chals, err = verifier.CommitChallenges(prover.ID)
 			if err != nil {
-				t.Log("generate commit challenges error", err)
+				log.Println("generate commit challenges error", err)
 				return
 			}
 
 			//prove commit and acc
 			commitProofs, accProof, err = prover.ProveCommitAndAcc(chals)
 			if err != nil {
-				t.Log("prove commit error", err)
+				log.Println("prove commit error", err)
 				return
 			}
 			if err == nil && commitProofs == nil && accProof == nil {
-				t.Log("update or delete task is already running")
+				log.Println("update or delete task is already running")
 				return
 			}
 			ok <- struct{}{}
 			start <- struct{}{}
-			err = prover.UpdateStatus(int64(len(chals))*8, false)
-			if err != nil {
-				t.Log("update status error", err)
+			if count < 1 {
+				err = prover.UpdateStatus(int64(len(chals))*8, false)
+				if err != nil {
+					log.Println("update status error", err)
+				}
 			}
+			count++
+			//prover.UpdateUpdateStatus()
 		}
 	}()
 
@@ -263,12 +269,12 @@ func TestConcurrently(t *testing.T) {
 			<-ok
 			err := verifier.VerifyCommitProofs(prover.ID, chals, commitProofs)
 			if err != nil {
-				t.Log("verify commit proof error", err)
+				log.Println("verify commit proof error", err)
 				return
 			}
 			err = verifier.VerifyAcc(prover.ID, chals, accProof)
 			if err != nil {
-				t.Log("verify acc proof error", err)
+				log.Println("verify acc proof error", err)
 				return
 			}
 			<-start
