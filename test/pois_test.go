@@ -179,27 +179,28 @@ func TestPois(t *testing.T) {
 
 func TestConcurrently(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(16*1024), int64(64)
-	// key, err := ParseKey("./key")
-	// if err != nil {
-	// 	t.Fatal("parse key error", err)
-	// }
-	key := acc.RsaKeygen(2048)
-	err := SaveKey("./key", key)
+	k, n, d := int64(8), int64(1024), int64(64)
+	key, err := ParseKey("./key")
 	if err != nil {
-		t.Fatal("save key error", err)
+		t.Fatal("parse key error", err)
 	}
+	// key := acc.RsaKeygen(2048)
+	// err := SaveKey("./key", key)
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 0, pois.Config{})
+	err = prover.Recovery(key, 0, 65792, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
 	verifier := pois.NewVerifier(k, n, d)
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	log.Println("prove acc", prover.AccManager.GetSnapshot().Accs.Value)
+	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 65792)
 	start, ok, wt := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
 
 	var (
@@ -209,18 +210,17 @@ func TestConcurrently(t *testing.T) {
 	)
 
 	go func() {
-		for {
+		for i := 0; i < 259; i++ {
 			err := prover.GenerateIdleFileSet()
 			if err != nil {
 				log.Println("generate idle file set error", err)
 				return
 			}
-			time.Sleep(1 * time.Minute)
+			time.Sleep(3 * time.Second)
 		}
 	}()
 
 	go func() {
-		count := 0
 		for {
 			if !prover.CommitDataIsReady() {
 				continue
@@ -253,14 +253,13 @@ func TestConcurrently(t *testing.T) {
 			}
 			ok <- struct{}{}
 			start <- struct{}{}
-			if count < 1 {
-				err = prover.UpdateStatus(int64(len(chals))*8, false)
-				if err != nil {
-					log.Println("update status error", err)
-				}
+			err = prover.UpdateStatus(int64(len(chals))*8, false)
+			if err != nil {
+				log.Println("update status error", err)
+				return
 			}
-			count++
-			//prover.UpdateUpdateStatus()
+			log.Println("prove commit proofs success")
+			log.Println(prover.AccManager.GetSnapshot().Accs.Value)
 		}
 	}()
 

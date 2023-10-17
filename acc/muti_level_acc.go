@@ -307,6 +307,7 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 		node := &AccNode{
 			Wit:      acc.Key.G.Bytes(),
 			Children: []*AccNode{subAcc},
+			Len:      1,
 		}
 		acc.Accs.Children = append(acc.Accs.Children, node)
 		acc.Parent = node
@@ -350,6 +351,7 @@ func (acc *MutiLevelAcc) addSubAccBybatch(subAcc *AccNode) {
 		acc.ElemNums += subAcc.Len
 		node := &AccNode{
 			Children: []*AccNode{subAcc},
+			Len:      1,
 		}
 		acc.Accs.Children = append(acc.Accs.Children, node)
 		acc.Parent = node
@@ -639,7 +641,7 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 	}
 
 	//update the upper accumulator and its evidence
-	for i := 0; i < acc.Accs.Len; i++ {
+	for i := 0; i < len(acc.Accs.Children); i++ {
 		acc.updateAcc(acc.Accs.Children[i])
 	}
 	acc.updateAcc(acc.Accs)
