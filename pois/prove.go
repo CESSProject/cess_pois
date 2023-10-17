@@ -318,6 +318,24 @@ func (p *Prover) AccRollback(isDel bool) bool {
 	return p.AccManager.RollBack()
 }
 
+func (p *Prover) SyncChainRearStatus(front, rear int64) error {
+
+	if !p.update.Load() {
+		return errors.New("status has been synchronized")
+	}
+	p.rw.RLock()
+	if p.front != front {
+		p.rw.RUnlock()
+		return errors.New("front did not match")
+	}
+	if rear != p.rear+p.setLen*p.clusterSize {
+		p.rw.RUnlock()
+		return errors.New("the status on chain is not updated")
+	}
+	p.rw.RUnlock()
+	return p.UpdateStatus(p.setLen*p.clusterSize, false)
+}
+
 // UpdateStatus need to be invoked after verify commit proof and acc proof success,
 // the update of the accumulator is serial and blocking, you need to update or roll back in time.
 func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
