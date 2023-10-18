@@ -386,6 +386,18 @@ func (p *Prover) ReturnSpace(size int64) {
 	p.rw.Unlock()
 }
 
+func (p *Prover) GetAccValue() []byte {
+	keyLen := 256
+	acc := p.AccManager.GetSnapshot().Accs.Value
+	res := make([]byte, keyLen)
+	if len(acc) > keyLen {
+		copy(res, acc[len(acc)-256:])
+		return res
+	}
+	copy(res[256-len(acc):], acc)
+	return res
+}
+
 // GetCount get Count Safely
 func (p *Prover) GetRear() int64 {
 	p.rw.RLock()

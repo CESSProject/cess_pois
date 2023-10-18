@@ -58,31 +58,32 @@ func Verify(key RsaKey, acc, u, wit []byte) bool {
 	return dash.Cmp(big.NewInt(0).SetBytes(acc)) == 0
 }
 
-func GenerateWitness(G, N big.Int, us [][]byte) [][]byte {
+func GenerateWitness(G, N []byte, us [][]byte) [][]byte {
 	if len(us) == 1 {
-		return [][]byte{G.Bytes()}
+		return [][]byte{G}
 	}
+	n := big.NewInt(0).SetBytes(N)
 	left, right := us[:len(us)/2], us[len(us)/2:]
-	g1, g2 := G, G
+	g1, g2 := *big.NewInt(0).SetBytes(G), *big.NewInt(0).SetBytes(G)
 	sig := make(chan struct{}, 2)
 	go func() {
 		for _, u := range right {
 			e := Hprime(*new(big.Int).SetBytes(u))
-			g1.Exp(&g1, &e, &N)
+			g1.Exp(&g1, &e, n)
 		}
 		sig <- struct{}{}
 	}()
 	go func() {
 		for _, u := range left {
 			e := Hprime(*new(big.Int).SetBytes(u))
-			g2.Exp(&g2, &e, &N)
+			g2.Exp(&g2, &e, n)
 		}
 		sig <- struct{}{}
 	}()
 	<-sig
 	<-sig
-	u1 := GenerateWitness(g1, N, left)
-	u2 := GenerateWitness(g2, N, right)
+	u1 := GenerateWitness(g1.Bytes(), N, left)
+	u2 := GenerateWitness(g2.Bytes(), N, right)
 	return append(u1, u2...)
 }
 
