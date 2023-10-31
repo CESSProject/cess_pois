@@ -370,7 +370,7 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 	p.rear += num
 	p.AccManager.UpdateSnapshot()
 	p.rw.Unlock()
-	if err := p.organizeFiles(num); err != nil {
+	if err := p.organizeFiles(p.rear-num, num); err != nil {
 		return errors.Wrap(err, "updat prover status error")
 	}
 	return nil
@@ -924,8 +924,7 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 	return proof, nil
 }
 
-func (p *Prover) organizeFiles(num int64) error {
-	idx := p.rear - num
+func (p *Prover) organizeFiles(idx, num int64) error {
 	dir := path.Join(
 		IdleFilePath,
 		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, idx/(p.clusterSize*p.setLen)+1),
@@ -980,7 +979,7 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 
 	count := int64(0)
 	fileTotalSize := FileSize * (p.Expanders.K + p.clusterSize) * 1024 * 1024
-	rootSize := (p.setLen*(p.Expanders.K+p.clusterSize) + 1) * int64(expanders.HashSize)
+	rootSize := (p.setLen*(p.Expanders.K+p.clusterSize) + 1) * int64(tree.DEFAULT_HASH_SIZE)
 	entries, err := ioutil.ReadDir(dir)
 	next := int64(1)
 	if err != nil {

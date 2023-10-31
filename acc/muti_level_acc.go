@@ -36,6 +36,7 @@ type AccHandle interface {
 	UpdateSnapshot() bool
 	//RollBack will roll back acc to snapshot version,please use with caution
 	RollBack() bool
+	RestoreSubAccFile(index int, elems [][]byte) error
 }
 
 var _AccManager *MutiLevelAcc
@@ -227,6 +228,17 @@ func (acc *MutiLevelAcc) updateAcc(node *AccNode) {
 	genWitsForAccNodes(acc.Key.G, acc.Key.N, node.Children)
 	last := node.Children[lens-1]
 	node.Value = generateAcc(acc.Key, last.Wit, [][]byte{last.Value})
+}
+
+func (acc *MutiLevelAcc) RestoreSubAccFile(index int, elems [][]byte) error {
+	if len(elems) != DEFAULT_ELEMS_NUM {
+		return errors.New("wrong number of elements")
+	}
+	data := &AccData{
+		Values: elems,
+	}
+	data.Wits = generateWitness(acc.Key.G, acc.Key.N, data.Values)
+	return saveAccData(acc.FilePath, index, data.Values, data.Wits)
 }
 
 func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
@@ -687,7 +699,7 @@ func VerifyMutilevelAccForBatch(key RsaKey, baseIdx int64, wits []*WitnessNode, 
 			subAcc = nil
 			continue
 		}
-		if r, _ := rand.Int(rand.Reader, new(big.Int).SetInt64(100)); r.Int64() < 50 &&
+		if r, _ := rand.Int(rand.Reader, new(big.Int).SetInt64(100)); r.Int64() < 20 &&
 			!VerifyAcc(key, wits[i].Acc.Elem, wits[i].Elem, wits[i].Wit) {
 			return false
 		}
