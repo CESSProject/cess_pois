@@ -43,8 +43,10 @@ func (prover *Prover) RestoreRawIdleFiles(setId int64) error {
 	}
 	defer prover.generate.Store(false)
 
+	start := (setId-1)*256/prover.clusterSize + 1
+
 	if err := prover.Expanders.GenerateIdleFileSet(
-		prover.ID, setId, prover.setLen, IdleFilePath); err != nil {
+		prover.ID, start, prover.setLen, IdleFilePath); err != nil {
 		prover.space += (fileNum + prover.setLen*prover.Expanders.K) * FileSize
 		return errors.Wrap(err, "restore raw idle files error")
 	}
@@ -111,6 +113,9 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 			}
 			tmp := strings.Split(info.Name(), "-")
 			index, err := strconv.Atoi(tmp[len(tmp)-1])
+			if err != nil {
+				return nil, err
+			}
 			if index < int(prover.Expanders.K) {
 				continue
 			}

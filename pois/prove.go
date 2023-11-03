@@ -41,6 +41,7 @@ type Prover struct {
 	rw         sync.RWMutex
 	delete     atomic.Bool
 	update     atomic.Bool
+	sync       atomic.Bool
 	generate   atomic.Bool
 	ID         []byte
 	chainState *ChainState
@@ -227,7 +228,20 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 // GenerateIdleFileSet generate num=(p.setLen*p.clusterSize(==k)) idle files, num must be consistent with the data given by CESS, otherwise it cannot pass the verification
 // This method is not thread-safe, please do not use it concurrently!
 func (p *Prover) GenerateIdleFileSet() error {
+
 	fileNum := p.setLen * p.clusterSize
+	freeSpace, err := util.GetDirFreeSpace(IdleFilePath)
+	freeSpace /= 1024 * 1024
+	var reserved int64 = 256
+	if err != nil {
+		return errors.Wrap(err, "generate idle file set error")
+	}
+
+	if p.space == fileNum*FileSize &&
+		freeSpace > uint64(p.Expanders.K*FileSize+reserved) {
+		p.space += p.Expanders.K * FileSize
+	}
+
 	if p.space < (fileNum+p.setLen*p.Expanders.K)*FileSize {
 		return SpaceFullError
 	}
@@ -255,9 +269,26 @@ func (p *Prover) GenerateIdleFileSets(tNum int) error {
 		return errors.New("generate idle file sets error bad thread number")
 	}
 
+	freeSpace, err := util.GetDirFreeSpace(IdleFilePath)
+	freeSpace /= 1024 * 1024
+	var reserved int64 = 256
+	if err != nil {
+		return errors.Wrap(err, "generate idle file sets error")
+	}
+
 	fileNum := p.setLen * p.clusterSize
+
+	if p.space == fileNum*FileSize &&
+		freeSpace > uint64(p.Expanders.K*FileSize+reserved) {
+		p.space += p.Expanders.K * FileSize
+	}
+
 	if p.space < (fileNum+p.setLen*p.Expanders.K)*FileSize*int64(tNum) {
-		return SpaceFullError
+		if p.space >= (fileNum+p.setLen*p.Expanders.K)*FileSize {
+			tNum = 1
+		} else {
+			return SpaceFullError
+		}
 	}
 	if !p.generate.CompareAndSwap(false, true) {
 		return errors.New("generate idle file sets error lock is occupied")
@@ -268,7 +299,6 @@ func (p *Prover) GenerateIdleFileSets(tNum int) error {
 	p.added += fileNum * int64(tNum)
 	p.space -= (fileNum + p.setLen*p.Expanders.K) * FileSize * int64(tNum)
 
-	var err error
 	wg := sync.WaitGroup{}
 	wg.Add(tNum)
 	for i := 0; i < tNum; i++ {
@@ -318,22 +348,28 @@ func (p *Prover) AccRollback(isDel bool) bool {
 	return p.AccManager.RollBack()
 }
 
-func (p *Prover) SyncChainRearStatus(front, rear int64) error {
+func (p *Prover) SyncChainPoisStatus(front, rear int64) error {
+	p.rw.Lock()
+	defer p.rw.Unlock()
 
-	if !p.update.Load() {
-		return errors.New("status has been synchronized")
+	if p.front == front && p.rear == rear {
+		return nil
 	}
-	p.rw.RLock()
-	if p.front != front {
-		p.rw.RUnlock()
-		return errors.New("front did not match")
+	p.sync.Store(true)
+	defer p.sync.Store(false)
+	for !p.update.Load() && !p.delete.Load() {
 	}
-	if rear != p.rear+p.setLen*p.clusterSize {
-		p.rw.RUnlock()
-		return errors.New("the status on chain is not updated")
+	var err error
+	p.AccManager, err = acc.Recovery(
+		AccPath, p.AccManager.GetSnapshot().Key, front, rear)
+	if err != nil {
+		return errors.Wrap(err, "reflash acc error")
 	}
-	p.rw.RUnlock()
-	return p.UpdateStatus(p.setLen*p.clusterSize, false)
+	//recovery front and rear
+	p.front = front
+	p.rear = rear
+	p.commited = rear
+	return nil
 }
 
 // UpdateStatus need to be invoked after verify commit proof and acc proof success,
@@ -453,6 +489,12 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 		err     error
 		commits Commits
 	)
+
+	if p.sync.Load() {
+		err := errors.New("syncing status, please try again")
+		return commits, errors.Wrap(err, "get commits error")
+	}
+
 	if !p.update.CompareAndSwap(false, true) {
 		err = errors.New("lock is occupied")
 		return commits, errors.Wrap(err, "get commits error")
@@ -884,6 +926,12 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 // ProveDeletion sort out num*IdleFileSize(unit MiB) available space,
 // you need to update prover status with this value rather than num after the verification is successful.
 func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
+
+	if p.sync.Load() {
+		err := errors.New("syncing status, please try again")
+		return nil, errors.Wrap(err, "prove deletion error")
+	}
+
 	if num <= 0 {
 		err := errors.New("bad file number")
 		return nil, errors.Wrap(err, "prove deletion error")
