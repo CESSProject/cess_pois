@@ -2,46 +2,55 @@ package pois
 
 import (
 	"bytes"
-	"cess_pois/acc"
-	"cess_pois/expanders"
-	"cess_pois/tree"
-	"cess_pois/util"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
 	"unsafe"
+
+	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
+	"github.com/CESSProject/cess_pois/tree"
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
 )
 
 var (
-	MaxBufSize = 1 * 16
-	verifier   *Verifier
-	SpaceChals = 1
-	Pick       = 1
+	IdleSetLen  int64 = 32
+	ClusterSize int64 = 8
+	verifier    *Verifier
+	SpaceChals  int64 = 8
+	Pick              = 4
 )
+
+type Record struct {
+	Key   acc.RsaKey
+	Acc   []byte
+	Front int64
+	Rear  int64
+}
 
 // ProverNode denote Prover
 type ProverNode struct {
-	ID         []byte   // Prover ID(generally, use AccountID)
-	CommitsBuf []Commit //buffer for all layer MHT proofs of one commit
-	BufSize    int
-	Acc        []byte //Prover's accumulator
-	Count      int64  // Idle file proofs' counter
+	ID         []byte // Prover ID(generally, use AccountID)
+	CommitsBuf Commits
+	*Record
 }
 
 type Verifier struct {
-	Key       acc.RsaKey
 	Expanders expanders.Expanders
 	Nodes     map[string]*ProverNode
 }
 
-func NewVerifier(key acc.RsaKey, k, n, d int64) *Verifier {
+func NewVerifier(k, n, d int64) *Verifier {
 	verifier = &Verifier{
-		Key:       key,
 		Expanders: *expanders.NewExpanders(k, n, d),
 		Nodes:     make(map[string]*ProverNode),
 	}
+	SpaceChals = k
+	ClusterSize = k
+	tree.InitMhtPool(int(n))
 	return verifier
 }
 
@@ -49,21 +58,49 @@ func GetVerifier() *Verifier {
 	return verifier
 }
 
-func (v *Verifier) RegisterProverNode(ID []byte) error {
+func (v *Verifier) RegisterProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) {
 	id := hex.EncodeToString(ID)
-	if _, ok := v.Nodes[id]; ok {
-		err := errors.New("prover node already exist")
-		return errors.Wrap(err, "register prover node error")
-	}
-	v.Nodes[id] = &ProverNode{
-		ID:         ID,
-		CommitsBuf: make([]Commit, MaxBufSize),
-		Acc:        v.Key.G.Bytes(),
-	}
-	return nil
+	node := NewProverNode(ID, key, acc, front, rear)
+	v.Nodes[id] = node
 }
 
-func (v *Verifier) ReceiveCommits(ID []byte, commits []Commit) bool {
+func NewProverNode(ID []byte, key acc.RsaKey, acc []byte, front, rear int64) *ProverNode {
+	return &ProverNode{
+		ID: ID,
+		Record: &Record{
+			Acc:   acc,
+			Front: front,
+			Rear:  rear,
+			Key:   key,
+		},
+	}
+}
+
+func (v *Verifier) GetNode(ID []byte) *ProverNode {
+	id := hex.EncodeToString(ID)
+	return v.Nodes[id]
+}
+
+func (v *Verifier) IsLogout(ID []byte) bool {
+	id := hex.EncodeToString(ID)
+	_, ok := v.Nodes[id]
+	return !ok
+}
+
+func (v *Verifier) LogoutProverNode(ID []byte) ([]byte, int64, int64) {
+	id := hex.EncodeToString(ID)
+	node, ok := v.Nodes[id]
+	if !ok {
+		return nil, 0, 0
+	}
+	acc := node.Acc
+	front := node.Front
+	rear := node.Rear
+	delete(v.Nodes, id)
+	return acc, front, rear
+}
+
+func (v *Verifier) ReceiveCommits(ID []byte, commits Commits) bool {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
 	if !ok {
@@ -71,93 +108,89 @@ func (v *Verifier) ReceiveCommits(ID []byte, commits []Commit) bool {
 	} else if !bytes.Equal(pNode.ID, ID) {
 		return false
 	}
-	if len(commits) > MaxBufSize-pNode.BufSize {
-		commits = commits[:MaxBufSize-pNode.BufSize]
-	}
-	hash := expanders.NewHash()
-	for i := 0; i < len(commits); i++ {
-		if len(commits[i].Roots) != int(v.Expanders.K+2) {
+
+	for i := 0; i < len(commits.FileIndexs); i++ {
+		if commits.FileIndexs[i] <= pNode.Rear { //
 			return false
 		}
-		hash.Reset()
-		for j := 0; j < len(commits[i].Roots)-1; j++ {
-			hash.Write(commits[i].Roots[j])
-		}
-		if !bytes.Equal(commits[i].Roots[v.Expanders.K+1],
-			hash.Sum(nil)) {
-			return false
-		}
-		pNode.CommitsBuf[pNode.BufSize] = commits[i]
-		pNode.BufSize += 1
 	}
+	//
+	rootNum := int((ClusterSize+v.Expanders.K)*IdleSetLen + 1)
+	if len(commits.Roots) != rootNum {
+		return false
+	}
+	//
+	hash := sha256.New()
+	for j := 0; j < len(commits.Roots)-1; j++ {
+		hash.Write(commits.Roots[j])
+	}
+	if !bytes.Equal(commits.Roots[len(commits.Roots)-1], hash.Sum(nil)) {
+		return false
+	}
+	pNode.CommitsBuf = commits
 	return true
 }
 
-func (v *Verifier) CommitChallenges(ID []byte, left, right int) ([][]int64, error) {
+func (v *Verifier) CommitChallenges(ID []byte) ([][]int64, error) {
 	id := hex.EncodeToString(ID)
 	pNode, ok := v.Nodes[id]
 	if !ok {
 		err := errors.New("prover node not found")
 		return nil, errors.Wrap(err, "generate commit challenges error")
 	}
-	if right-left <= 0 || right > pNode.BufSize || left < 0 {
-		err := errors.New("bad file number")
-		return nil, errors.Wrap(err, "generate commit challenges error")
-	}
-	challenges := make([][]int64, right-left)
-	for i := left; i < right; i++ {
-		idx := i - left
-		challenges[idx] = make([]int64, v.Expanders.K+2)
-		challenges[idx][0] = pNode.CommitsBuf[i].FileIndex
+	challenges := make([][]int64, IdleSetLen) //
+	start := (pNode.CommitsBuf.FileIndexs[0] - 1) / ClusterSize
+	for i := int64(0); i < IdleSetLen; i++ { //
+		challenges[i] = make([]int64, v.Expanders.K+ClusterSize+1) //
+		challenges[i][0] = start + i + 1                           // calculate file cluster id
+		//
+		for j := 1; j <= int(ClusterSize); j++ {
+			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
+			if err != nil {
+				return nil, errors.Wrap(err, "generate commit challenges error")
+			}
+			r.Add(r, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
+			challenges[i][j] = r.Int64()
+		}
+
 		r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
 		if err != nil {
 			return nil, errors.Wrap(err, "generate commit challenges error")
 		}
-		r.Add(r, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
-		challenges[idx][1] = r.Int64()
-		for j := 2; j < int(v.Expanders.K+2); j++ {
+		r.Add(r, new(big.Int).SetInt64(v.Expanders.N*(v.Expanders.K-1)))
+		challenges[i][ClusterSize+1] = r.Int64()
+
+		for j := int(ClusterSize + 2); j < len(challenges[i]); j++ { //
 			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.D+1))
 			if err != nil {
 				return nil, errors.Wrap(err, "generate commit challenges error")
 			}
-			challenges[idx][j] = r.Int64()
+			challenges[i][j] = r.Int64()
 		}
+		//
 	}
 	return challenges, nil
 }
 
-func (v *Verifier) SpaceChallenges(ID []byte, param int64) ([][]int64, error) {
+func (v *Verifier) SpaceChallenges(param int64) ([]int64, error) {
 	//Randomly select several nodes from idle files as random challenges
-	id := hex.EncodeToString(ID)
-	pNode, ok := v.Nodes[id]
-	if !ok {
-		err := errors.New("prover node not found")
-		return nil, errors.Wrap(err, "generate commit challenges error")
+	if param < SpaceChals {
+		param = SpaceChals
 	}
-	if pNode.Count < param {
-		param = pNode.Count
-	}
-	challenges := make([][]int64, param)
+	challenges := make([]int64, param)
 	mp := make(map[int64]struct{})
 	for i := int64(0); i < param; i++ {
 		for {
-			r1, err := rand.Int(rand.Reader, new(big.Int).SetInt64(pNode.Count))
+			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
 			if err != nil {
 				return nil, errors.Wrap(err, "generate commit challenges error")
 			}
-			//range [1,Count]
-			r1 = r1.Add(r1, big.NewInt(1))
-			if _, ok := mp[r1.Int64()]; ok {
+			if _, ok := mp[r.Int64()]; ok {
 				continue
 			}
-			challenges[i] = make([]int64, SpaceChals+1)
-			challenges[i][0] = r1.Int64()
-			r2, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
-			if err != nil {
-				return nil, errors.Wrap(err, "generate commit challenges error")
-			}
-			r2.Add(r2, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
-			challenges[i][1] = r2.Int64()
+			mp[r.Int64()] = struct{}{}
+			r.Add(r, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
+			challenges[i] = r.Int64()
 			break
 		}
 	}
@@ -171,7 +204,9 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 		err := errors.New("prover node not found")
 		return errors.Wrap(err, "verify commit proofs error")
 	}
-	if len(chals) != len(proofs) || len(chals) > pNode.BufSize {
+	if len(chals) != len(proofs) || len(chals) != int(IdleSetLen) ||
+		len(pNode.CommitsBuf.FileIndexs) != int(ClusterSize*IdleSetLen) ||
+		len(pNode.CommitsBuf.Roots) != int((v.Expanders.K+ClusterSize)*IdleSetLen+1) {
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify commit proofs error")
 	}
@@ -180,33 +215,41 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 		return errors.Wrap(err, "verify commit proofs error")
 	}
 
-	index := 0
-	for i := 0; i < pNode.BufSize; i++ {
-		if chals[0][0] == pNode.CommitsBuf[i].FileIndex {
-			index = i
-			break
-		}
-	}
-	frontSize := int(unsafe.Sizeof(expanders.NodeType(0))) + len(ID) + 8
+	frontSize := int(unsafe.Sizeof(expanders.NodeType(0))) + len(ID) + 8 + 8
 	hashSize := expanders.HashSize
-	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize)
+	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize+int(v.Expanders.K/2)*hashSize)
+	zero := make([]byte, int(v.Expanders.D+1)*hashSize+int(v.Expanders.K/2)*hashSize)
+
+	var (
+		idx  expanders.NodeType
+		fidx int64
+		hash []byte
+	)
+
 	for i := 0; i < len(proofs); i++ {
 
-		if chals[i][1] != int64(proofs[i][0].Node.Index) {
-			err := errors.New("bad expanders node index")
-			return errors.Wrap(err, "verify commit proofs error")
+		for j := 1; j <= int(ClusterSize)+1; j++ {
+			if chals[i][j] != int64(proofs[i][j-1].Node.Index) {
+				err := errors.New("bad expanders node index")
+				return errors.Wrap(err, "verify commit proofs error")
+			}
 		}
 
-		var idx expanders.NodeType
-		for j := 1; j < len(chals[i]); j++ {
-			if j == 1 {
-				idx = expanders.NodeType(chals[i][1])
+		for j := int64(1); j < int64(len(chals[i])); j++ {
+			if j <= ClusterSize+1 {
+				idx = expanders.NodeType(chals[i][j])
 			} else {
 				idx = expanders.NodeType(proofs[i][j-2].Parents[chals[i][j]].Index)
 			}
 
-			layer := int64(idx) / v.Expanders.N
-			root := pNode.CommitsBuf[index+i].Roots[layer]
+			layer := int64(0)
+			if j <= ClusterSize {
+				layer = v.Expanders.K + j - 1
+			} else {
+				layer = int64(idx) / v.Expanders.N
+			}
+
+			root := pNode.CommitsBuf.Roots[layer*IdleSetLen+(chals[i][0]-1)%IdleSetLen]
 			pathProof := tree.PathProof{
 				Locs: proofs[i][j-1].Node.Locs,
 				Path: proofs[i][j-1].Node.Paths,
@@ -215,33 +258,68 @@ func (v *Verifier) VerifyCommitProofs(ID []byte, chals [][]int64, proofs [][]Com
 				err := errors.New("verify path proof error")
 				return errors.Wrap(err, "verify commit proofs error")
 			}
-			if len(proofs[i][j-1].Parents) <= 0 {
-				continue
+			//verify node label
+			if fidx = 0; layer >= v.Expanders.K {
+				fidx = (chals[i][0]-1)*ClusterSize + int64(j)
 			}
-			util.CopyData(
-				label, ID,
-				expanders.GetBytes(int64(chals[i][0])),
-				expanders.GetBytes(idx),
-			)
-			size := frontSize
-			for _, p := range proofs[i][j-1].Parents {
-				if int64(p.Index) >= layer*v.Expanders.N {
-					root = pNode.CommitsBuf[index+i].Roots[layer]
-				} else {
-					root = pNode.CommitsBuf[index+i].Roots[layer-1]
+			util.CopyData(label, ID, expanders.GetBytes(chals[i][0]), expanders.GetBytes(fidx),
+				expanders.GetBytes(idx), zero)
+
+			if layer > 0 {
+				size := frontSize
+				logicalLayer := layer
+				if logicalLayer > v.Expanders.K {
+					logicalLayer = v.Expanders.K
 				}
+				for _, p := range proofs[i][j-1].Parents {
+					if int64(p.Index) >= logicalLayer*v.Expanders.N {
+						root = pNode.CommitsBuf.Roots[layer*IdleSetLen+(chals[i][0]-1)%IdleSetLen]
+					} else {
+						root = pNode.CommitsBuf.Roots[(logicalLayer-1)*IdleSetLen+(chals[i][0]-1)%IdleSetLen]
+					}
+					pathProof := tree.PathProof{
+						Locs: p.Locs,
+						Path: p.Paths,
+					}
+					if !tree.VerifyPathProof(root, p.Label, pathProof) {
+						err := errors.New("verify parent path proof error")
+						return errors.Wrap(err, "verify commit proofs error")
+					}
+					copy(label[size:size+hashSize], p.Label)
+					size += hashSize
+				}
+				// add file dependencies
+				//util.CopyData(label[size:], pNode.CommitsBuf.Roots[(layer-1)*IdleSetLen:layer*IdleSetLen]...)
+				for l := 1; layer >= v.Expanders.K && l < len(proofs[i][j-1].Elders); l++ {
+					pathProof := tree.PathProof{
+						Locs: proofs[i][j-1].Elders[l].Locs,
+						Path: proofs[i][j-1].Elders[l].Paths,
+					}
+					ridx := ((layer-v.Expanders.K/2)/v.Expanders.K+2*int64(l-1))*IdleSetLen + (chals[i][0]-1)%IdleSetLen
+					if !tree.VerifyPathProof(pNode.CommitsBuf.Roots[ridx], proofs[i][j-1].Elders[l].Label, pathProof) {
+						err := errors.New("verify elder node path proof error")
+						return errors.Wrap(err, "verify commit proofs error")
+					}
+					copy(label[size:size+hashSize], proofs[i][j-1].Elders[l].Label)
+					size += hashSize
+				}
+			}
+
+			if (chals[i][0]-1)%IdleSetLen+layer > 0 {
 				pathProof := tree.PathProof{
-					Locs: p.Locs,
-					Path: p.Paths,
+					Locs: proofs[i][j-1].Elders[0].Locs,
+					Path: proofs[i][j-1].Elders[0].Paths,
 				}
-				if !tree.VerifyPathProof(root, p.Label, pathProof) {
-					err := errors.New("verify parent path proof error")
+				ridx := layer*IdleSetLen + (chals[i][0]-1)%IdleSetLen - 1
+				if !tree.VerifyPathProof(pNode.CommitsBuf.Roots[ridx], proofs[i][j-1].Elders[0].Label, pathProof) {
+					err := errors.New("verify neighbor node path proof error")
 					return errors.Wrap(err, "verify commit proofs error")
 				}
-				copy(label[size:size+hashSize], p.Label)
-				size += hashSize
+				hash = expanders.GetHash(append(label, proofs[i][j-1].Elders[0].Label...))
+			} else {
+				hash = expanders.GetHash(label)
 			}
-			if !bytes.Equal(expanders.GetHash(label), proofs[i][j-1].Node.Label) {
+			if !bytes.Equal(hash, proofs[i][j-1].Node.Label) {
 				err := errors.New("verify label error")
 				return errors.Wrap(err, "verify commit proofs error")
 			}
@@ -255,6 +333,12 @@ func (v *Verifier) VerifyNodeDependencies(ID []byte, chals [][]int64, proofs [][
 	if pick > len(proofs) {
 		pick = len(proofs)
 	}
+
+	clusters := make([]int64, len(chals))
+	for i := 0; i < len(chals); i++ {
+		clusters[i] = chals[i][0]
+	}
+
 	for i := 0; i < pick; i++ {
 		r1, err := rand.Int(rand.Reader, new(big.Int).SetInt64(int64(len(proofs))))
 		if err != nil {
@@ -264,10 +348,16 @@ func (v *Verifier) VerifyNodeDependencies(ID []byte, chals [][]int64, proofs [][
 		if err != nil {
 			return errors.Wrap(err, "verify node dependencies error")
 		}
-		proof := proofs[r1.Int64()][r2.Int64()]
+		index := r2.Int64()
+		proof := proofs[r1.Int64()][index]
 		node := expanders.NewNode(proof.Node.Index)
 		node.Parents = make([]expanders.NodeType, 0, v.Expanders.D+1)
-		expanders.CalcParents(&v.Expanders, node, ID, chals[r1.Int64()][0])
+		//
+		if index < ClusterSize {
+			expanders.CalcParents(&v.Expanders, node, ID, append(clusters, index+1)...)
+		} else {
+			expanders.CalcParents(&v.Expanders, node, ID, clusters...)
+		}
 		for j := 0; j < len(node.Parents); j++ {
 			if node.Parents[j] != proof.Parents[j].Index {
 				err = errors.New("node relationship mismatch")
@@ -285,77 +375,74 @@ func (v *Verifier) VerifyAcc(ID []byte, chals [][]int64, proof *AccProof) error 
 		err := errors.New("prover node not found")
 		return errors.Wrap(err, "verify acc proofs error")
 	}
-	if len(chals) != len(proof.Indexs) || len(chals) > pNode.BufSize {
+	if len(chals) != len(proof.Indexs)/int(ClusterSize) || len(chals) != int(IdleSetLen) {
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify acc proofs error")
 	}
-	index := 0
-	for i := 0; i < pNode.BufSize; i++ {
-		if chals[0][0] == pNode.CommitsBuf[i].FileIndex {
-			index = i
-			break
+	label := make([]byte, len(ID)+8+tree.DEFAULT_HASH_SIZE)
+	for i := int64(0); i < int64(len(chals)); i++ {
+		for j := int64(0); j < ClusterSize; j++ {
+			if proof.Indexs[i*ClusterSize+j] != (chals[i][0]-1)*ClusterSize+j+1 ||
+				pNode.Rear+i*ClusterSize+j+1 != (chals[i][0]-1)*ClusterSize+j+1 {
+				err := errors.New("bad file index")
+				return errors.Wrap(err, "verify acc proofs error")
+			}
+			util.CopyData(label, ID, expanders.GetBytes((chals[i][0]-1)*ClusterSize+j+1),
+				pNode.CommitsBuf.Roots[(v.Expanders.K+j)*IdleSetLen+i])
+			if !bytes.Equal(expanders.GetHash(label), proof.Labels[i*ClusterSize+j]) {
+				err := errors.New("verify file label error")
+				return errors.Wrap(err, "verify acc proofs error")
+			}
 		}
 	}
-	label := make([]byte, len(ID)+8+expanders.HashSize)
-	for i := 0; i < len(chals); i++ {
-		if chals[i][0] != proof.Indexs[i] {
-			err := errors.New("bad file index")
-			return errors.Wrap(err, "verify acc proofs error")
-		}
-		util.CopyData(label, ID, expanders.GetBytes(chals[i][0]),
-			pNode.CommitsBuf[i+index].Roots[v.Expanders.K])
-		if !bytes.Equal(expanders.GetHash(label), proof.Labels[i]) {
-			err := errors.New("verify file label error")
-			return errors.Wrap(err, "verify acc proofs error")
-		}
-	}
-	if !acc.VerifyInsertUpdate(v.Key, proof.WitChains,
+	if !acc.VerifyInsertUpdate(pNode.Key, proof.WitChains,
 		proof.Labels, proof.AccPath, pNode.Acc) {
 		err := errors.New("verify muti-level acc error")
 		return errors.Wrap(err, "verify acc proofs error")
 	}
 	pNode.Acc = proof.AccPath[len(proof.AccPath)-1]
-	pNode.CommitsBuf = append(pNode.CommitsBuf[:index],
-		pNode.CommitsBuf[index+len(chals):]...)
-	pNode.BufSize -= len(chals)
-	pNode.Count += int64(len(chals))
+	pNode.CommitsBuf = Commits{}
+	pNode.Rear += int64(len(chals)) * ClusterSize
 	return nil
 }
 
-func (v *Verifier) VerifySpace(ID []byte, chals [][]int64, proof *SpaceProof) error {
-	id := hex.EncodeToString(ID)
-	pNode, ok := v.Nodes[id]
-	if !ok {
-		err := errors.New("prover node not found")
-		return errors.Wrap(err, "verify space proofs error")
-	}
-	if len(chals) != len(proof.Roots) {
+func (v *Verifier) VerifySpace(pNode *ProverNode, chals []int64, proof *SpaceProof) error {
+	if len(chals) <= 0 || proof.Left <= pNode.Front || pNode.Rear+1 < proof.Right { //
 		err := errors.New("bad proof data")
 		return errors.Wrap(err, "verify space proofs error")
 	}
-	label := make([]byte, len(ID)+8+expanders.HashSize)
-	for i := 0; i < len(chals); i++ {
-		if chals[i][1] != int64(proof.Proofs[i].Index) {
-			err := errors.New("bad file index")
-			return errors.Wrap(err, "verify space proofs error")
+	label := make([]byte, len(pNode.ID)+8+tree.DEFAULT_HASH_SIZE)
+	for i := 0; i < len(proof.Roots); i++ {
+		for j := 0; j < len(chals); j++ {
+			if chals[j] != int64(proof.Proofs[i][j].Index) {
+				err := errors.New("bad file index")
+				return errors.Wrap(err, "verify space proofs error")
+			}
+			pathProof := tree.PathProof{
+				Locs: proof.Proofs[i][j].Locs,
+				Path: proof.Proofs[i][j].Paths,
+			}
+			//check index
+			if !tree.CheckIndexPath(chals[j], pathProof.Locs) {
+				err := errors.New("verify index path error")
+				return errors.Wrap(err, "verify space proofs error")
+			}
+			//check path proof
+			if !tree.VerifyPathProof(proof.Roots[i], proof.Proofs[i][j].Label, pathProof) {
+				err := errors.New("verify path proof error")
+				return errors.Wrap(err, "verify space proofs error")
+			}
 		}
-		pathProof := tree.PathProof{
-			Locs: proof.Proofs[i].Locs,
-			Path: proof.Proofs[i].Paths,
-		}
-		if !tree.VerifyPathProof(proof.Roots[i], proof.Proofs[i].Label, pathProof) {
-			err := errors.New("verify path proof error")
-			return errors.Wrap(err, "verify space proofs error")
-		}
-		util.CopyData(label, ID, expanders.GetBytes(chals[i][0]), proof.Roots[i])
+
+		util.CopyData(label, pNode.ID, expanders.GetBytes(proof.Left+int64(i)), proof.Roots[i])
 		if !bytes.Equal(expanders.GetHash(label), proof.WitChains[i].Elem) {
 			err := errors.New("verify file label error")
 			return errors.Wrap(err, "verify space proofs error")
 		}
-		if !acc.VerifyMutilevelAcc(v.Key, proof.WitChains[i], pNode.Acc) {
-			err := errors.New("verify acc proof error")
-			return errors.Wrap(err, "verify space proofs error")
-		}
+	}
+	if !acc.VerifyMutilevelAccForBatch(pNode.Key, proof.Left, proof.WitChains, pNode.Acc) {
+		err := errors.New("verify acc proof error")
+		return errors.Wrap(err, "verify space proofs error")
 	}
 	return nil
 }
@@ -367,26 +454,24 @@ func (v *Verifier) VerifyDeletion(ID []byte, proof *DeletionProof) error {
 		err := errors.New("prover node not found")
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
-	if pNode.BufSize > 0 {
-		err := errors.New("commit proof not finished")
-		return errors.Wrap(err, "verify deletion proofs error")
-	}
 	lens := len(proof.Roots)
-	if int64(lens) > pNode.Count {
+	if int64(lens) > pNode.Rear-pNode.Front {
 		err := errors.New("file number out of range")
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
 	labels := make([][]byte, lens)
 	for i := 0; i < lens; i++ {
-		label := make([]byte, len(ID)+8+expanders.HashSize)
+		label := make([]byte, len(ID)+8+tree.DEFAULT_HASH_SIZE)
 		util.CopyData(label, ID,
-			expanders.GetBytes(pNode.Count-int64(lens-i-1)), proof.Roots[i])
+			expanders.GetBytes(pNode.Front+int64(i)+1), proof.Roots[i])
 		labels[i] = expanders.GetHash(label)
 	}
-	if !acc.VerifyDeleteUpdate(v.Key, proof.WitChain,
+	if !acc.VerifyDeleteUpdate(pNode.Key, proof.WitChain,
 		labels, proof.AccPath, pNode.Acc) {
 		err := errors.New("verify acc proof error")
 		return errors.Wrap(err, "verify deletion proofs error")
 	}
+	pNode.Front += int64(lens)
+	pNode.Acc = proof.AccPath[len(proof.AccPath)-1]
 	return nil
 }

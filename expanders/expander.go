@@ -2,10 +2,11 @@ package expanders
 
 import (
 	"bytes"
-	"cess_pois/util"
 	"encoding/binary"
 	"encoding/json"
 	"sync"
+
+	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
 )
@@ -13,11 +14,11 @@ import (
 type NodeType int32
 
 type Expanders struct {
-	K, N, D  int64
-	Size     int64      `json:"size"`
-	HashSize int64      `json:"hash_szie"`
-	FilePool *sync.Pool `json:"-"`
-	NodePool *sync.Pool `json:"-"`
+	K, N, D   int64
+	Size      int64      `json:"size"`
+	HashSize  int64      `json:"hash_szie"`
+	FilePool  *sync.Pool `json:"-"`
+	NodesPool *sync.Pool `json:"-"`
 }
 
 type Node struct {
@@ -56,12 +57,13 @@ func NewExpanders(k, n, d int64) *Expanders {
 			return &buf
 		},
 	}
-
-	expanders.NodePool = &sync.Pool{
+	expanders.NodesPool = &sync.Pool{
 		New: func() any {
-			node := NewNode(0)
-			node.Parents = make([]NodeType, 0, expanders.D+1)
-			return node
+			buf := make([]Node, n)
+			for i := int64(0); i < n; i++ {
+				buf[i].Parents = make([]NodeType, 0, d+1)
+			}
+			return &buf
 		},
 	}
 	return expanders

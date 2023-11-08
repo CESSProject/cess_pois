@@ -2,26 +2,25 @@ package acc
 
 import (
 	"bytes"
-	"cess_pois/util"
-	"encoding/json"
-	"fmt"
+	"crypto/rand"
 	"math"
 	"math/big"
 	"os"
-	"path"
-	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
 const (
-	DEFAULT_PATH      = "./acc/"
-	DEFAULT_DIR_PERM  = 0777
-	DEFAULT_ELEMS_NUM = 1024
-	DEFAULT_LEVEL     = 3
-	DEFAULT_NAME      = "sub-acc"
+	DEFAULT_PATH        = "./acc/"
+	DEFAULT_DIR_PERM    = 0777
+	DEFAULT_ELEMS_NUM   = 256
+	DEFAULT_LEVEL       = 3
+	DEFAULT_NAME        = "sub-acc"
+	DEFAULT_BACKUP_NAME = "backup-sub-acc"
+	TIMEOUT             = time.Minute * 2
 )
 
 type AccHandle interface {
@@ -37,6 +36,7 @@ type AccHandle interface {
 	UpdateSnapshot() bool
 	//RollBack will roll back acc to snapshot version,please use with caution
 	RollBack() bool
+	RestoreSubAccFile(index int, elems [][]byte) error
 }
 
 var _AccManager *MutiLevelAcc
@@ -63,13 +63,44 @@ type MutiLevelAcc struct {
 	Accs      *AccNode
 	Key       RsaKey
 	ElemNums  int
+	Deleted   int
 	CurrCount int
 	Curr      *AccNode
 	Parent    *AccNode
 	rw        *sync.RWMutex
 	isUpdate  bool
+	stable    bool
+	isDel     *atomic.Bool
 	snapshot  *MutiLevelAcc
 	FilePath  string
+}
+
+func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) {
+	if accPath == "" {
+		accPath = DEFAULT_PATH
+	}
+	if _, err := os.Stat(accPath); err != nil {
+		err := os.MkdirAll(accPath, DEFAULT_DIR_PERM)
+		if err != nil {
+			return nil, errors.Wrap(err, "recovery muti-acc error")
+		}
+	}
+	acc := &AccNode{
+		Value: key.G.Bytes(),
+	}
+	_AccManager = &MutiLevelAcc{
+		Accs:     acc,
+		Key:      key,
+		rw:       new(sync.RWMutex),
+		FilePath: accPath,
+		stable:   true,
+		isDel:    new(atomic.Bool),
+		Deleted:  int(front),
+	}
+	if err := _AccManager.constructMutiAcc(rear); err != nil {
+		return nil, errors.Wrap(err, "recovery muti-acc error")
+	}
+	return _AccManager, nil
 }
 
 func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
@@ -89,7 +120,9 @@ func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
 		Accs:     acc,
 		Key:      key,
 		rw:       new(sync.RWMutex),
+		isDel:    new(atomic.Bool),
 		FilePath: path,
+		stable:   true,
 	}
 	return _AccManager, nil
 }
@@ -108,12 +141,13 @@ func (acc *MutiLevelAcc) GetSnapshot() *MutiLevelAcc {
 }
 
 func (acc *MutiLevelAcc) UpdateSnapshot() bool {
-	acc.rw.RLock()
-	defer acc.rw.RUnlock()
+	acc.rw.Lock()
+	defer acc.rw.Unlock()
 	if acc.isUpdate {
 		return false
 	}
 	acc.createSnapshot()
+	acc.stable = true
 	return true
 }
 
@@ -123,7 +157,14 @@ func (acc *MutiLevelAcc) RollBack() bool {
 	if acc.isUpdate || acc.snapshot == nil {
 		return false
 	}
+	if acc.Deleted != acc.snapshot.Deleted {
+		err := recoveryAccData(acc.FilePath, acc.Deleted/DEFAULT_ELEMS_NUM)
+		if err != nil {
+			return false
+		}
+	}
 	acc.copy(acc.snapshot)
+	acc.stable = true
 	return true
 }
 
@@ -144,6 +185,9 @@ func (acc *MutiLevelAcc) copy(other *MutiLevelAcc) {
 		acc.Curr = acc.Parent.Children[acc.Parent.Len-1]
 	}
 	acc.rw = other.rw
+	acc.stable = other.stable
+	acc.Deleted = other.Deleted
+	acc.isDel = other.isDel
 	acc.FilePath = other.FilePath
 }
 
@@ -156,12 +200,13 @@ func (acc *MutiLevelAcc) setUpdate(yes bool) bool {
 	acc.rw.Lock()
 	defer acc.rw.Unlock()
 	//two or more updates at the same time are not allowed
-	if acc.isUpdate && yes {
+	if yes && (acc.isUpdate || !acc.stable) {
 		return false
 	}
 	if yes {
 		acc.createSnapshot()
 		acc.isUpdate = true
+		acc.stable = false
 		return true
 	}
 	//acc.createSnapshot()
@@ -185,6 +230,17 @@ func (acc *MutiLevelAcc) updateAcc(node *AccNode) {
 	node.Value = generateAcc(acc.Key, last.Wit, [][]byte{last.Value})
 }
 
+func (acc *MutiLevelAcc) RestoreSubAccFile(index int, elems [][]byte) error {
+	if len(elems) != DEFAULT_ELEMS_NUM {
+		return errors.New("wrong number of elements")
+	}
+	data := &AccData{
+		Values: elems,
+	}
+	data.Wits = generateWitness(acc.Key.G, acc.Key.N, data.Values)
+	return saveAccData(acc.FilePath, index, data.Values, data.Wits)
+}
+
 func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
 	lens := len(elems)
 	//the range of length of elems be insert is [0,1024]
@@ -193,11 +249,6 @@ func (acc *MutiLevelAcc) AddElements(elems [][]byte) error {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "add elements error")
 	}
-	if !acc.setUpdate(true) {
-		err := errors.New("update permission is occupied")
-		return errors.Wrap(err, "add elements error")
-	}
-	defer acc.setUpdate(false)
 	newAcc, err := acc.addElements(elems)
 	if err != nil {
 		return errors.Wrap(err, "add elements error")
@@ -213,8 +264,8 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 	)
 	node := &AccNode{}
 	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
-		index := (acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
-		data, err = readAccData(DEFAULT_PATH, index)
+		index := (acc.Deleted + acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
+		data, err = readAccData(acc.FilePath, index)
 		if err != nil {
 			return nil, errors.Wrap(err, "add elements to sub acc error")
 		}
@@ -229,13 +280,14 @@ func (acc *MutiLevelAcc) addElements(elems [][]byte) (*AccNode, error) {
 		acc.Key, data.Wits[node.Len-1],
 		[][]byte{data.Values[node.Len-1]},
 	)
-	index := ((acc.ElemNums + len(elems)) - 1) / DEFAULT_ELEMS_NUM
-	err = saveAccData(DEFAULT_PATH, index, data.Values, data.Wits)
+	index := ((acc.Deleted + acc.ElemNums + len(elems)) - 1) / DEFAULT_ELEMS_NUM
+	err = saveAccData(acc.FilePath, index, data.Values, data.Wits)
 	return node, errors.Wrap(err, "add elements to sub acc error")
 }
 
 // addSubAccs inserts the sub acc built with new elements into the multilevel accumulator
 func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
+	//acc.CurrCount will be equal to zero when the accumulator is empty
 	if acc.CurrCount == 0 {
 		acc.Curr = subAcc
 		acc.CurrCount = acc.Curr.Len
@@ -254,6 +306,7 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 		acc.ElemNums += acc.CurrCount
 		return
 	}
+	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
 	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
 		acc.ElemNums += subAcc.Len - acc.CurrCount
 		lens := len(acc.Parent.Children)
@@ -266,6 +319,7 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 		node := &AccNode{
 			Wit:      acc.Key.G.Bytes(),
 			Children: []*AccNode{subAcc},
+			Len:      1,
 		}
 		acc.Accs.Children = append(acc.Accs.Children, node)
 		acc.Parent = node
@@ -278,56 +332,96 @@ func (acc *MutiLevelAcc) addSubAcc(subAcc *AccNode) {
 	acc.updateAcc(acc.Accs)
 }
 
+// addSubAccBybatch inserts the sub acc built with new elements into the multilevel accumulator,
+// However, the lazy update mechanism is adopted, and the final update is performed after the accumulator is built.
+func (acc *MutiLevelAcc) addSubAccBybatch(subAcc *AccNode) {
+	//acc.CurrCount will be equal to zero when the accumulator is empty
+	if acc.CurrCount == 0 {
+		acc.Curr = subAcc
+		acc.CurrCount = acc.Curr.Len
+		acc.Curr.Wit = acc.Key.G.Bytes()
+		acc.Parent = &AccNode{
+			Children: []*AccNode{subAcc},
+			Len:      1,
+		}
+		acc.Accs = &AccNode{
+			Children: []*AccNode{acc.Parent},
+			Len:      1,
+		}
+		acc.ElemNums += acc.CurrCount
+		return
+	}
+	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
+	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
+		acc.ElemNums += subAcc.Len - acc.CurrCount
+		lens := len(acc.Parent.Children)
+		acc.Parent.Children[lens-1] = subAcc
+	} else if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
+		acc.ElemNums += subAcc.Len
+		acc.Parent.Children = append(acc.Parent.Children, subAcc)
+	} else {
+		acc.ElemNums += subAcc.Len
+		node := &AccNode{
+			Children: []*AccNode{subAcc},
+			Len:      1,
+		}
+		acc.Accs.Children = append(acc.Accs.Children, node)
+		acc.Parent = node
+	}
+	acc.Curr = subAcc
+	acc.CurrCount = acc.Curr.Len
+}
+
 func (acc *MutiLevelAcc) DeleteElements(num int) error {
-	if num <= 0 || acc.CurrCount > 0 && num > acc.CurrCount ||
-		num > DEFAULT_ELEMS_NUM {
+
+	index := acc.Deleted / DEFAULT_ELEMS_NUM
+	offset := acc.Deleted % DEFAULT_ELEMS_NUM
+	if num <= 0 || num > acc.ElemNums || num+offset > DEFAULT_ELEMS_NUM {
 		err := errors.New("illegal number of elements")
 		return errors.Wrap(err, "delete elements error")
 	}
-	if !acc.setUpdate(true) {
-		err := errors.New("update permission is occupied")
+
+	//read data from disk
+	data, err := readAccData(acc.FilePath, index)
+	if err != nil {
 		return errors.Wrap(err, "delet elements error")
 	}
-	defer acc.setUpdate(false)
-	if num < acc.CurrCount {
-		index := (acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
-		data, err := readAccData(DEFAULT_PATH, index)
-		if err != nil {
-			return errors.Wrap(err, "delet elements error")
-		}
-		data.Values = data.Values[:acc.CurrCount-num]
+	//buckup file
+	err = backupAccData(acc.FilePath, index)
+	if err != nil {
+		return errors.Wrap(err, "delet elements error")
+	}
+
+	//delete elements from acc and update acc
+	if num < len(data.Values) {
+		data.Values = data.Values[num:]
 		data.Wits = generateWitness(acc.Key.G, acc.Key.N, data.Values)
-		err = saveAccData(DEFAULT_PATH, index, data.Values, data.Wits)
+		err = saveAccData(acc.FilePath, index, data.Values, data.Wits)
 		if err != nil {
 			return errors.Wrap(err, "delet elements error")
 		}
-		acc.Curr.Len = acc.CurrCount - num
-		acc.CurrCount = acc.Curr.Len
-		acc.Curr.Value = generateAcc(
-			acc.Key, data.Wits[acc.CurrCount-1],
-			[][]byte{data.Values[acc.CurrCount-1]},
-		)
+		acc.Accs.Children[0].Children[0].Len -= num
+		len := acc.Accs.Children[0].Children[0].Len
+		acc.Accs.Children[0].Children[0].Value = generateAcc(
+			acc.Key, data.Wits[len-1],
+			[][]byte{data.Values[len-1]})
 	} else {
-		index := (acc.ElemNums - 1) / DEFAULT_ELEMS_NUM
-		err := deleteAccData(DEFAULT_PATH, index)
-		if err != nil {
+
+		if err = DeleteAccData(acc.FilePath, index); err != nil {
 			return errors.Wrap(err, "delet elements error")
 		}
-		acc.Parent.Children = acc.Parent.Children[:acc.Parent.Len-1]
-		acc.Parent.Len -= 1
-		if acc.Parent.Len == 0 && acc.Accs.Len >= 1 {
-			acc.Accs.Children = acc.Accs.Children[:acc.Accs.Len-1]
+
+		//update mid-level acc
+		acc.Accs.Children[0].Children = acc.Accs.Children[0].Children[1:]
+		acc.Accs.Children[0].Len -= 1
+		if acc.Accs.Children[0].Len == 0 && acc.Accs.Len >= 1 {
+			acc.Accs.Children = acc.Accs.Children[1:]
 			acc.Accs.Len -= 1
-			if acc.Accs.Len > 0 {
-				acc.Parent = acc.Accs.Children[acc.Accs.Len-1]
-			} else {
-				acc.Parent = nil
-			}
 		}
-		if acc.Parent != nil && acc.Parent.Len >= 1 {
-			acc.Curr = acc.Parent.Children[acc.Parent.Len-1]
-			acc.CurrCount = acc.Curr.Len
-		} else {
+
+		//update top-level acc
+		if acc.Accs.Len == 0 {
+			acc.Parent = nil
 			acc.Curr = nil
 			acc.CurrCount = 0
 		}
@@ -337,6 +431,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 	acc.updateAcc(acc.Parent)
 	//update parents and top acc
 	acc.updateAcc(acc.Accs)
+	acc.Deleted += num
 	return nil
 }
 
@@ -356,142 +451,39 @@ func copyAccNode(src *AccNode, target *AccNode) {
 	}
 }
 
-// Generate the accumulator
-func generateAcc(key RsaKey, acc []byte, elems [][]byte) []byte {
-	if acc == nil {
-		return nil
-	}
-	G := new(big.Int).SetBytes(acc)
-	for _, elem := range elems {
-		prime := Hprime(*new(big.Int).SetBytes(elem))
-		G.Exp(G, &prime, &key.N)
-	}
-	return G.Bytes()
-}
-
-func generateWitness(G, N big.Int, us [][]byte) [][]byte {
-	if len(us) == 0 {
-		return nil
-	}
-	if len(us) == 1 {
-		return [][]byte{G.Bytes()}
-	}
-	left, right := us[:len(us)/2], us[len(us)/2:]
-	g1, g2 := G, G
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for _, u := range right {
-			e := Hprime(*new(big.Int).SetBytes(u))
-			g1.Exp(&g1, &e, &N)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for _, u := range left {
-			e := Hprime(*new(big.Int).SetBytes(u))
-			g2.Exp(&g2, &e, &N)
-		}
-	}()
-	wg.Wait()
-	u1 := generateWitness(g1, N, left)
-	u2 := generateWitness(g2, N, right)
-	return append(u1, u2...)
-}
-
-func genWitsForAccNodes(G, N big.Int, elems []*AccNode) {
-	lens := len(elems)
-	if lens <= 0 {
-		return
-	}
-	if lens == 1 {
-		elems[0].Wit = G.Bytes()
-		return
-	}
-	left, right := elems[:lens/2], elems[lens/2:]
-	g1, g2 := G, G
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for _, u := range right {
-			e := Hprime(*new(big.Int).SetBytes(u.Value))
-			g1.Exp(&g1, &e, &N)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for _, u := range left {
-			e := Hprime(*new(big.Int).SetBytes(u.Value))
-			g2.Exp(&g2, &e, &N)
-		}
-	}()
-	wg.Wait()
-	genWitsForAccNodes(g1, N, left)
-	genWitsForAccNodes(g2, N, right)
-}
-
-func saveAccData(dir string, index int, elems, wits [][]byte) error {
-	data := AccData{
-		Values: elems,
-		Wits:   wits,
-	}
-	jbytes, err := json.Marshal(data)
-	if err != nil {
-		return errors.Wrap(err, "save element data error")
-	}
-	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
-	return util.SaveFile(fpath, jbytes)
-}
-
-func readAccData(dir string, index int) (*AccData, error) {
-	fpath := path.Join(dir, fmt.Sprintf("%s-%d", DEFAULT_NAME, index))
-	data, err := util.ReadFile(fpath)
-	if err != nil {
-		return nil, errors.Wrap(err, "read element data error")
-	}
-	accData := &AccData{}
-	err = json.Unmarshal(data, accData)
-	return accData, errors.Wrap(err, "read element data error")
-}
-
-// deleteAccData delete from the given index
-func deleteAccData(dir string, last int) error {
-	fs, err := os.ReadDir(dir)
-	if err != nil {
-		return errors.Wrap(err, "delete element data error")
-	}
-	for _, f := range fs {
-		slice := strings.Split(f.Name(), "-")
-		index, err := strconv.Atoi(slice[len(slice)-1])
-		if err != nil {
-			return errors.Wrap(err, "delete element data error")
-		}
-		if index >= last {
-			util.DeleteFile(path.Join(dir, f.Name()))
-		}
-	}
-	return nil
-}
-
+// get witness chains for prove space challenge
 func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error) {
-	var err error
+
+	var (
+		data *AccData
+		err  error
+	)
 	snapshot := acc.GetSnapshot()
 	chains := make([]*WitnessNode, len(indexs))
+	fidx := int64(-1)
 	for i := 0; i < len(indexs); i++ {
-		chains[i], err = snapshot.getWitnessChain(indexs[i])
+		if indexs[i] <= int64(acc.Deleted) || indexs[i] > int64(acc.Deleted+acc.ElemNums) {
+			return nil, errors.New("bad index")
+		}
+		if (indexs[i]-1)/DEFAULT_ELEMS_NUM > fidx {
+			fidx = (indexs[i] - 1) / DEFAULT_ELEMS_NUM
+			data, err = readAccData(acc.FilePath, int(fidx))
+			if err != nil {
+				return nil, err
+			}
+		}
+		chains[i], err = snapshot.getWitnessChain(indexs[i], data)
 		if err != nil {
 			return nil, errors.Wrap(err, "get witness chains error")
 		}
+
 	}
 	return chains, nil
 }
 
-func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
-	if index <= 0 || index > int64(acc.ElemNums) {
-		return nil, errors.New("bad index")
-	}
+func (acc *MutiLevelAcc) getWitnessChain(index int64, data *AccData) (*WitnessNode, error) {
+	idx := (index - int64(DEFAULT_ELEMS_NUM-len(data.Values)) - 1) % DEFAULT_ELEMS_NUM
+	index -= int64(acc.Deleted - acc.Deleted%DEFAULT_ELEMS_NUM)
 	p := acc.Accs
 	var wit *WitnessNode
 	i := 0
@@ -512,11 +504,6 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	if i < DEFAULT_LEVEL {
 		return nil, errors.New("get witness node error")
 	}
-	data, err := readAccData(DEFAULT_PATH, int((index-1)/DEFAULT_ELEMS_NUM))
-	if err != nil {
-		return nil, err
-	}
-	idx := int((index - 1) % DEFAULT_ELEMS_NUM)
 	wit = &WitnessNode{
 		Elem: data.Values[idx],
 		Wit:  data.Wits[idx],
@@ -525,39 +512,70 @@ func (acc *MutiLevelAcc) getWitnessChain(index int64) (*WitnessNode, error) {
 	return wit, nil
 }
 
-// Accumulator validation interface
+// DeleteElementsAndProof delete elements from muti-level acc and create proof of deleted elements
+func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte, error) {
 
-func VerifyAcc(key RsaKey, acc, u, wit []byte) bool {
-	e := Hprime(*new(big.Int).SetBytes(u))
-	dash := new(big.Int).Exp(
-		big.NewInt(0).SetBytes(wit),
-		&e, &key.N,
-	)
-	return dash.Cmp(new(big.Int).SetBytes(acc)) == 0
-}
+	if acc.ElemNums == 0 {
+		err := errors.New("delete null set")
+		return nil, nil, errors.Wrap(err, "prove acc deletion proof error")
+	}
+	//Before deleting elements, get their chain of witness
+	exist := &WitnessNode{
+		Elem: acc.Accs.Children[0].Children[0].Value,
+		Wit:  acc.Accs.Children[0].Children[0].Wit,
+		Acc: &WitnessNode{
+			Elem: acc.Accs.Children[0].Value,
+			Wit:  acc.Accs.Children[0].Wit,
+			Acc:  &WitnessNode{Elem: acc.Accs.Value},
+		},
+	}
 
-// VerifyMutilevelAcc uses witness chains to realize the existence proof of elements in multi-level accumulators;
-// The witness chain is the witness list from the bottom accumulator to the top accumulator (root accumulator)
-func VerifyMutilevelAcc(key RsaKey, wits *WitnessNode, acc []byte) bool {
-	for wits != nil && wits.Acc != nil {
-		if !VerifyAcc(key, wits.Acc.Elem, wits.Elem, wits.Wit) {
-			return false
+	snapshot := acc.GetSnapshot()
+
+	acc.isDel.Store(true)
+	for !acc.setUpdate(true) {
+		time.Sleep(time.Second)
+	}
+	acc.isDel.Store(false)
+	defer acc.setUpdate(false)
+
+	err := acc.DeleteElements(num)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "prove acc deletion proof error")
+	}
+	//computes the new accumulators generated after removing elements,
+	//when deleting element requires deleting an empty accumulator at the same time,
+	//the corresponding new accumulator is G
+	accs := make([][]byte, DEFAULT_LEVEL)
+	accs[DEFAULT_LEVEL-1] = acc.Accs.Value
+	count := 1
+	for p, q := acc.Accs, snapshot.Accs; p != nil && q != nil && count < DEFAULT_LEVEL; {
+		if p.Len < q.Len {
+			for i := DEFAULT_LEVEL - count - 1; i >= 0; i-- {
+				accs[i] = acc.Key.G.Bytes()
+			}
+			break
 		}
-		wits = wits.Acc
+		count++
+		p, q = p.Children[0], q.Children[0]
+		accs[DEFAULT_LEVEL-count] = p.Value
 	}
-	if wits == nil {
-		return false
-	}
-	return bytes.Equal(wits.Elem, acc)
+	return exist, accs, nil
 }
 
 // AddElementsAndProof add elements to muti-level acc and create proof of added elements
 func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]byte, error) {
 	snapshot := acc.GetSnapshot()
 	exist := &WitnessNode{Elem: snapshot.Accs.Value}
+
+	for acc.isDel.Load() || !acc.setUpdate(true) {
+		time.Sleep(time.Second)
+	}
+	defer acc.setUpdate(false)
+
 	err := acc.AddElements(elems)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "proof acc insert error")
+		return nil, nil, errors.Wrap(err, "prove acc insertion proof")
 	}
 	//the proof of adding elements consists of two parts,
 	//the first part is the witness chain of the bottom accumulator where the element is located,
@@ -588,6 +606,106 @@ func (acc *MutiLevelAcc) AddElementsAndProof(elems [][]byte) (*WitnessNode, [][]
 		}
 	}
 	return exist, accs, nil
+}
+
+func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
+	//acc is empty
+	if rear == int64(acc.Deleted) {
+		return nil
+	}
+	num := (int(rear) - acc.Deleted - 1) / DEFAULT_ELEMS_NUM
+	offset := acc.Deleted % DEFAULT_ELEMS_NUM
+	for i := 0; i <= num; i++ {
+		index := acc.Deleted/DEFAULT_ELEMS_NUM + i
+		backup, err := readBackup(acc.FilePath, index)
+		if err != nil || len(backup.Values)+offset != DEFAULT_ELEMS_NUM {
+			backup, err = readAccData(acc.FilePath, index)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = recoveryAccData(acc.FilePath, index)
+			if err != nil {
+				return err
+			}
+		}
+		node := &AccNode{}
+		left, right := 0, len(backup.Values)
+		if i == 0 && DEFAULT_ELEMS_NUM-offset < right {
+			left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - right) //sub real file offset
+			backup.Values = backup.Values[left:right]
+			backup.Wits = generateWitness(acc.Key.G, acc.Key.N, backup.Values)
+			err = saveAccData(acc.FilePath, index, backup.Values, backup.Wits)
+			if err != nil {
+				return err
+			}
+		}
+
+		node.Len = len(backup.Values)
+		node.Value = generateAcc(
+			acc.Key, backup.Wits[node.Len-1],
+			[][]byte{backup.Values[node.Len-1]},
+		)
+		acc.addSubAccBybatch(node)
+		if i == 0 && offset > 0 {
+			acc.CurrCount += acc.Deleted % DEFAULT_ELEMS_NUM
+		}
+	}
+
+	//update the upper accumulator and its evidence
+	for i := 0; i < len(acc.Accs.Children); i++ {
+		acc.updateAcc(acc.Accs.Children[i])
+	}
+	acc.updateAcc(acc.Accs)
+	return nil
+}
+
+// Accumulator validation interface
+
+func VerifyAcc(key RsaKey, acc, u, wit []byte) bool {
+	e := Hprime(*new(big.Int).SetBytes(u))
+	dash := new(big.Int).Exp(
+		big.NewInt(0).SetBytes(wit),
+		&e, &key.N,
+	)
+	return dash.Cmp(new(big.Int).SetBytes(acc)) == 0
+}
+
+// VerifyMutilevelAcc uses witness chains to realize the existence proof of elements in multi-level accumulators;
+// The witness chain is the witness list from the bottom accumulator to the top accumulator (root accumulator)
+func VerifyMutilevelAcc(key RsaKey, wits *WitnessNode, acc []byte) bool {
+	for wits != nil && wits.Acc != nil {
+		if !VerifyAcc(key, wits.Acc.Elem, wits.Elem, wits.Wit) {
+			return false
+		}
+		wits = wits.Acc
+	}
+	if wits == nil {
+		return false
+	}
+	return bytes.Equal(wits.Elem, acc)
+}
+
+func VerifyMutilevelAccForBatch(key RsaKey, baseIdx int64, wits []*WitnessNode, acc []byte) bool {
+	var subAcc []byte
+	for i := 0; i < len(wits); i++ {
+		if subAcc != nil && !bytes.Equal(wits[i].Acc.Elem, subAcc) {
+			return false
+		}
+		if (int64(i)+baseIdx)%DEFAULT_ELEMS_NUM == 0 || i == len(wits)-1 {
+			if !VerifyMutilevelAcc(key, wits[i], acc) {
+				return false
+			}
+			subAcc = nil
+			continue
+		}
+		if r, _ := rand.Int(rand.Reader, new(big.Int).SetInt64(100)); r.Int64() < 20 &&
+			!VerifyAcc(key, wits[i].Acc.Elem, wits[i].Elem, wits[i].Wit) {
+			return false
+		}
+		subAcc = wits[i].Acc.Elem
+	}
+	return true
 }
 
 func VerifyInsertUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {
@@ -622,44 +740,6 @@ func VerifyInsertUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, ac
 		count++
 	}
 	return true
-}
-
-// DeleteElementsAndProof delete elements from muti-level acc and create proof of deleted elements
-func (acc *MutiLevelAcc) DeleteElementsAndProof(num int) (*WitnessNode, [][]byte, error) {
-
-	//Before deleting elements, get their chain of witness
-	exist := &WitnessNode{
-		Elem: acc.Curr.Value,
-		Wit:  acc.Curr.Wit,
-		Acc: &WitnessNode{
-			Elem: acc.Parent.Value,
-			Wit:  acc.Parent.Wit,
-			Acc:  &WitnessNode{Elem: acc.Accs.Value},
-		},
-	}
-	snapshot := acc.GetSnapshot()
-	err := acc.DeleteElements(num)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "proof acc delete error")
-	}
-	//computes the new accumulators generated after removing elements,
-	//when deleting element requires deleting an empty accumulator at the same time,
-	//the corresponding new accumulator is G
-	accs := make([][]byte, DEFAULT_LEVEL)
-	accs[DEFAULT_LEVEL-1] = acc.Accs.Value
-	count := 1
-	for p, q := acc.Accs, snapshot.Accs; p != nil && q != nil && count < DEFAULT_LEVEL; {
-		if p.Len < q.Len {
-			for i := DEFAULT_LEVEL - count - 1; i >= 0; i-- {
-				accs[i] = acc.Key.G.Bytes()
-			}
-			break
-		}
-		count++
-		p, q = p.Children[p.Len-1], q.Children[q.Len-1]
-		accs[DEFAULT_LEVEL-count] = p.Value
-	}
-	return exist, accs, nil
 }
 
 func VerifyDeleteUpdate(key RsaKey, exist *WitnessNode, elems, accs [][]byte, acc []byte) bool {

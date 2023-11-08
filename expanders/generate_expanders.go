@@ -1,14 +1,14 @@
 package expanders
 
 import (
-	"cess_pois/util"
+	"github.com/CESSProject/cess_pois/util"
 )
 
 func ConstructStackedExpanders(k, n, d int64) *Expanders {
 	return NewExpanders(k, n, d)
 }
 
-func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count int64) {
+func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count ...int64) {
 
 	if node == nil || expanders == nil ||
 		cap(node.Parents) != int(expanders.D+1) {
@@ -21,7 +21,7 @@ func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count int64) 
 		return
 	}
 
-	lens := len(MinerID) + 8*18
+	lens := len(MinerID) + 8*17 + len(Count)*8
 	content := make([]byte, lens)
 	util.CopyData(content, MinerID, GetBytes(Count), GetBytes(layer))
 	node.AddParent(node.Index - NodeType(expanders.N))
@@ -64,22 +64,4 @@ func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count int64) 
 			s++
 		}
 	}
-}
-
-func (expanders *Expanders) RunRelationalMapServer(MinerID []byte, Count int64) <-chan *Node {
-
-	out := make(chan *Node, expanders.N/1024)
-
-	go func() {
-		for l := int64(0); l <= expanders.K; l++ {
-			for index := int64(0); index < expanders.N; index++ {
-				node := expanders.NodePool.Get().(*Node)
-				node.Index = NodeType(index + expanders.N*l)
-				node.Parents = node.Parents[:0]
-				CalcParents(expanders, node, MinerID, Count)
-				out <- node
-			}
-		}
-	}()
-	return out
 }

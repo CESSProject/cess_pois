@@ -3,9 +3,6 @@ package tree
 import (
 	"bytes"
 	"crypto/sha256"
-	"crypto/sha512"
-	"errors"
-	"hash"
 	"math"
 	"sync"
 )
@@ -17,72 +14,61 @@ type PathProof struct {
 	Path [][]byte
 }
 
+const (
+	DEFAULT_HASH_SIZE = 32
+	DEFAULT_THREAD    = 4
+)
+
 var pool *sync.Pool
 
-func InitMhtPool(eLen, hashSize int) {
+func InitMhtPool(eLen int) {
+	if pool != nil {
+		return
+	}
 	pool = &sync.Pool{
 		New: func() interface{} {
-			mht := make(LightMHT, eLen*hashSize)
+			mht := make(LightMHT, eLen*DEFAULT_HASH_SIZE)
 			return &mht
 		},
 	}
 }
 
+func GetLightMhtFromPool() *LightMHT {
+	mht := pool.Get().(*LightMHT)
+	return mht
+}
+
+func PutLightMhtToPool(mht *LightMHT) {
+	if pool != nil {
+		pool.Put(mht)
+	}
+}
+
 // CalcLightMhtWithBytes calc light weight mht whit fixed size elements data
-func CalcLightMhtWithBytes(data []byte, size int, usePool bool) *LightMHT {
-	mht := new(LightMHT)
-	lens := len(data)
-	if lens%size != 0 {
-		return mht
-	}
-	if usePool && pool != nil {
-		mht = pool.Get().(*LightMHT)
-		if len(*mht) != lens {
-			*mht = make(LightMHT, lens)
-		}
-	} else {
-		*mht = make(LightMHT, lens)
-	}
-	hash := NewHash(size)
-	for i := 0; i < lens/size; i++ {
+func (mht *LightMHT) CalcLightMhtWithBytes(data []byte, size int) {
+	hash := sha256.New()
+	for i := 0; i < len(data)/size; i++ {
 		hash.Reset()
 		hash.Write(data[i*size : (i+1)*size])
-		copy((*mht)[i*size:(i+1)*size], hash.Sum(nil))
+		copy((*mht)[i*DEFAULT_HASH_SIZE:(i+1)*DEFAULT_HASH_SIZE], hash.Sum(nil))
 	}
-	return calcLightMht(*mht, size)
+	calcLightMht(mht)
 }
 
-func CalcLightMhtWitElements(elems [][]byte, size int, usePool bool) *LightMHT {
-	mht := new(LightMHT)
-	lens := len(elems)
-	if lens%size != 0 {
-		return mht
-	}
-	if usePool && pool != nil {
-		mht = pool.Get().(*LightMHT)
-		if len(*mht) != lens*size {
-			*mht = make(LightMHT, lens*size)
-		}
-	} else {
-		*mht = make(LightMHT, lens*size)
-	}
-	hash := NewHash(size)
-	for i := 0; i < lens; i++ {
-		hash.Reset()
-		hash.Write(elems[i])
-		copy((*mht)[i*size:(i+1)*size], hash.Sum(nil))
-	}
-	return calcLightMht(*mht, size)
+func (mht *LightMHT) CalcLightMhtWithAux(aux []byte) {
+	copy(*mht, aux)
+	calcLightMht(mht)
 }
 
-func calcLightMht(mht LightMHT, size int) *LightMHT {
-	lens := len(mht)
+func calcLightMht(mht *LightMHT) *LightMHT {
+	lens := len(*mht)
 	p := lens / 2
-	src := mht[:]
-	hash := NewHash(size)
+	src := (*mht)[:]
+	hash := sha256.New()
+	size := DEFAULT_HASH_SIZE
 	for i := 0; i < int(math.Log2(float64(lens/size)))+1; i++ {
 		num := lens / (1 << (i + 1))
-		target := mht[p : p+num]
+		target := (*mht)[p : p+num]
 		for j, k := num/size-1, num*2/size-2; j >= 0 && k >= 0; j, k = j-1, k-2 {
 			hash.Reset()
 			hash.Write(src[k*size : (k+2)*size])
@@ -91,40 +77,35 @@ func calcLightMht(mht LightMHT, size int) *LightMHT {
 		p = p / 2
 		src = target
 	}
-	return &mht
+	return mht
 }
 
-func RecoveryMht(mht *LightMHT) {
-	if pool != nil {
-		pool.Put(mht)
-	}
-}
-
-func (mht LightMHT) GetRoot(size int) []byte {
-	if len(mht) < size*2 {
+func (mht LightMHT) GetRoot() []byte {
+	if len(mht) < DEFAULT_HASH_SIZE*2 {
 		return nil
 	}
-	root := make([]byte, size)
-	copy(root, mht[size:size*2])
+	root := make([]byte, DEFAULT_HASH_SIZE)
+	copy(root, mht[DEFAULT_HASH_SIZE:DEFAULT_HASH_SIZE*2])
 	return root
 }
 
 func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error) {
-	if len(mht) != len(data) {
-		return PathProof{}, errors.New("error data")
-	}
-	lens := int(math.Log2(float64(len(data) / size)))
+	return mht.getPathProof(data, index, size, false)
+}
+
+func (mht LightMHT) getPathProof(data []byte, index, size int, hashed bool) (PathProof, error) {
+	deep := int(math.Log2(float64(len(data) / size)))
 	proof := PathProof{
-		Locs: make([]byte, lens),
-		Path: make([][]byte, lens),
+		Locs: make([]byte, deep),
+		Path: make([][]byte, deep),
 	}
 	var (
 		loc byte
 		d   []byte
 	)
-	hash := NewHash(size)
-	num, p := len(data), len(mht)
-	for i := 0; i < lens; i++ {
+
+	num, p := len(mht), len(mht)
+	for i := 0; i < deep; i++ {
 		if (index+1)%2 == 0 {
 			loc = 0
 			d = data[(index-1)*size : index*size]
@@ -132,10 +113,11 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 			loc = 1
 			d = data[(index+1)*size : (index+2)*size]
 		}
-		if i == 0 {
-			hash.Reset()
+		if i == 0 && (size != DEFAULT_HASH_SIZE || !hashed) {
+			hash := sha256.New()
 			hash.Write(d)
 			proof.Path[i] = hash.Sum(nil)
+			size = DEFAULT_HASH_SIZE
 		} else {
 			proof.Path[i] = make([]byte, size)
 			copy(proof.Path[i], d)
@@ -148,11 +130,42 @@ func (mht LightMHT) GetPathProof(data []byte, index, size int) (PathProof, error
 	return proof, nil
 }
 
+func GetPathProofWithAux(data, aux []byte, index, size int) (PathProof, error) {
+	proof := PathProof{}
+	auxSize := (len(aux) / DEFAULT_HASH_SIZE)
+	plateSize := len(data) / size / auxSize
+	mht := make(LightMHT, plateSize*DEFAULT_HASH_SIZE)
+	left := index / plateSize
+	data = data[left*plateSize*size : (left+1)*plateSize*size]
+	hash := sha256.New()
+	for i := 0; i < plateSize; i++ {
+		hash.Reset()
+		hash.Write(data[i*size : (i+1)*size])
+		copy(mht[i*DEFAULT_HASH_SIZE:(i+1)*DEFAULT_HASH_SIZE], hash.Sum(nil))
+	}
+	calcLightMht(&mht)
+
+	subProof, err := mht.getPathProof(data, index%plateSize, size, false)
+	if err != nil {
+		return proof, err
+	}
+	mht = make(LightMHT, len(aux))
+	copy(mht, aux)
+	calcLightMht(&mht)
+	topProof, err := mht.getPathProof(aux, left, DEFAULT_HASH_SIZE, true)
+	if err != nil {
+		return proof, err
+	}
+	proof.Locs = append(subProof.Locs, topProof.Locs...)
+	proof.Path = append(subProof.Path, topProof.Path...)
+	return proof, nil
+}
+
 func VerifyPathProof(root, data []byte, proof PathProof) bool {
 	if len(proof.Locs) != len(proof.Path) {
 		return false
 	}
-	hash := NewHash(len(root))
+	hash := sha256.New()
 	hash.Write(data)
 	data = hash.Sum(nil)
 	if len(data) != len(root) {
@@ -170,13 +183,16 @@ func VerifyPathProof(root, data []byte, proof PathProof) bool {
 	return bytes.Equal(root, data)
 }
 
-func NewHash(size int) hash.Hash {
-	switch size {
-	case 32:
-		return sha256.New()
-	case 64:
-		return sha512.New()
-	default:
-		return sha512.New()
+func CheckIndexPath(index int64, locs []byte) bool {
+	for i := 0; i < len(locs); i++ {
+		if (index+1)%2 == 0 {
+			if locs[i] != 0 {
+				return false
+			}
+		} else if locs[i] != 1 {
+			return false
+		}
+		index /= 2
 	}
+	return true
 }
