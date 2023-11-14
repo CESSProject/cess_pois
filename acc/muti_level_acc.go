@@ -37,6 +37,8 @@ type AccHandle interface {
 	//RollBack will roll back acc to snapshot version,please use with caution
 	RollBack() bool
 	RestoreSubAccFile(index int, elems [][]byte) error
+	//
+	GetFilePath() string
 }
 
 var _AccManager *MutiLevelAcc
@@ -129,6 +131,10 @@ func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
 
 func GetAccHandle() AccHandle {
 	return _AccManager
+}
+
+func (acc *MutiLevelAcc) GetFilePath() string {
+	return acc.FilePath
 }
 
 func (acc *MutiLevelAcc) GetSnapshot() *MutiLevelAcc {

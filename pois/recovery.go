@@ -81,6 +81,27 @@ func (prover *Prover) RestoreSubAccFiles(setId int64) error {
 	return nil
 }
 
+func (prover *Prover) CheckAndRestoreSubAccFiles(front, rear int64) error {
+
+	if front < 0 || front > rear {
+		err := errors.New("bad front and rear value")
+		return errors.Wrap(err, "check and restore sub acc files error")
+	}
+	start := front/acc.DEFAULT_ELEMS_NUM + 1
+	end := rear / acc.DEFAULT_ELEMS_NUM
+	for i := start; i <= end; i++ {
+		fpath := path.Join(prover.AccManager.GetFilePath(), fmt.Sprintf("%s-%d", acc.DEFAULT_NAME, i-1))
+		if _, err := os.Stat(fpath); err == nil {
+			continue
+		}
+		err := prover.RestoreSubAccFiles(i)
+		if err != nil {
+			return errors.Wrap(err, "check and restore sub acc files error")
+		}
+	}
+	return nil
+}
+
 func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 
 	filesDir := path.Join(
