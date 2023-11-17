@@ -100,7 +100,7 @@ func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) 
 		Deleted:  int(front),
 	}
 	if err := _AccManager.constructMutiAcc(rear); err != nil {
-		return nil, errors.Wrap(err, "recovery muti-acc error")
+		return _AccManager, errors.Wrap(err, "recovery muti-acc error")
 	}
 	return _AccManager, nil
 }

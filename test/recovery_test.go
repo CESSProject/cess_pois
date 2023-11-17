@@ -48,11 +48,11 @@ func TestRestoreSubAccFile(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Init(key, pois.Config{})
+	err = prover.Recovery(key, 0, 256, pois.Config{})
 	if err != nil {
-		t.Fatal("init prover error", err)
+		t.Log("init prover error", err)
 	}
-	err = prover.RestoreSubAccFiles(6)
+	err = prover.CheckAndRestoreSubAccFiles(0, 256)
 	if err != nil {
 		t.Fatal("restore sub acc file error", err)
 	}

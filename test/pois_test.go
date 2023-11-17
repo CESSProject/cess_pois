@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"log"
 	"math/big"
 	_ "net/http/pprof"
@@ -17,98 +18,111 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("parse key error", err)
-	}
-	// key := acc.RsaKeygen(2048)
-	// err := SaveKey("./key", key)
+	k, n, d := int64(8), int64(1024*16), int64(64)
+	// key, err := ParseKey("./key")
 	// if err != nil {
-	// 	t.Fatal("save key error", err)
+	// 	t.Fatal("parse key error", err)
 	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 8, 256*5, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
 	verifier := pois.NewVerifier(k, n, d)
+	nodes := pois.CreateNewNodes()
 
 	ts := time.Now()
-	// err = prover.GenerateIdleFileSet()
-	// if err != nil {
-	// 	t.Fatal("generate idle file set error", err)
-	// }
-	// t.Log("generate idle file set time", time.Since(ts))
+	err = prover.GenerateIdleFileSet()
+	if err != nil {
+		t.Fatal("generate idle file set error", err)
+	}
+	t.Log("generate idle file set time", time.Since(ts))
 
-	// // get commits
-	// ts = time.Now()
-	// commits, err := prover.GetIdleFileSetCommits()
-	// if err != nil {
-	// 	t.Fatal("get commits error", err)
-	// }
-	// t.Log("get commits time", time.Since(ts))
+	// get commits
+	ts = time.Now()
+	commits, err := prover.GetIdleFileSetCommits()
+	if err != nil {
+		t.Fatal("get commits error", err)
+	}
+	t.Log("get commits time", time.Since(ts))
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256*5)
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
-	// //verifier receive commits
-	// ts = time.Now()
-	// if !verifier.ReceiveCommits(prover.ID, commits) {
-	// 	t.Fatal("receive commits error")
-	// }
-	// t.Log("verifier receive commits time", time.Since(ts))
+	//verifier receive commits
+	ts = time.Now()
+	pNode := nodes.GetNode(prover.ID)
+	if !verifier.ReceiveCommits(&pNode, commits) {
+		t.Fatal("receive commits error")
+	}
+	t.Log("verifier receive commits time", time.Since(ts))
+	nodes.UpdateNode(pNode)
+	//generate commits challenges
+	ts = time.Now()
+	chals, err := verifier.CommitChallenges(pNode)
+	//t.Log("commit chals ", chals)
+	if err != nil {
+		t.Fatal("generate commit challenges error", err)
+	}
+	t.Log("generate commit challenges time", time.Since(ts))
 
-	// //generate commits challenges
-	// ts = time.Now()
-	// chals, err := verifier.CommitChallenges(prover.ID)
-	// //t.Log("commit chals ", chals)
-	// if err != nil {
-	// 	t.Fatal("generate commit challenges error", err)
-	// }
-	// t.Log("generate commit challenges time", time.Since(ts))
+	//prove commit and acc
+	ts = time.Now()
+	commitProofs, accProof, err := prover.ProveCommitAndAcc(chals)
+	if err != nil {
+		t.Fatal("prove commit error", err)
+	}
+	if err == nil && commitProofs == nil && accProof == nil {
+		t.Log("update or delete task is already running")
+	}
+	t.Log("prove commit time", time.Since(ts))
 
-	// //prove commit and acc
-	// ts = time.Now()
-	// commitProofs, accProof, err := prover.ProveCommitAndAcc(chals)
-	// if err != nil {
-	// 	t.Fatal("prove commit error", err)
-	// }
-	// if err == nil && commitProofs == nil && accProof == nil {
-	// 	t.Log("update or delete task is already running")
-	// }
-	// t.Log("prove commit time", time.Since(ts))
+	jdata1, err := json.Marshal(commitProofs)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	jdata2, err := json.Marshal(accProof)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	t.Log("commit and acc proof data length", len(jdata1)+len(jdata2))
+	//verify commit proof
+	ts = time.Now()
+	err = verifier.VerifyCommitProofs(nodes.GetNode(prover.ID), chals, commitProofs)
+	if err != nil {
+		t.Fatal("verify commit proof error", err)
+	}
+	t.Log("verify commit proof time", time.Since(ts))
 
-	// //verify commit proof
-	// ts = time.Now()
-	// err = verifier.VerifyCommitProofs(prover.ID, chals, commitProofs)
-	// if err != nil {
-	// 	t.Fatal("verify commit proof error", err)
-	// }
-	// t.Log("verify commit proof time", time.Since(ts))
+	//verify acc proof
+	ts = time.Now()
+	pNode = nodes.GetNode(prover.ID)
+	err = verifier.VerifyAcc(&pNode, chals, accProof)
+	if err != nil {
+		t.Fatal("verify acc proof error", err)
+	}
+	t.Log("verify acc proof time", time.Since(ts))
 
-	// //verify acc proof
-	// ts = time.Now()
-	// err = verifier.VerifyAcc(prover.ID, chals, accProof)
-	// if err != nil {
-	// 	t.Fatal("verify acc proof error", err)
-	// }
-	// t.Log("verify acc proof time", time.Since(ts))
+	nodes.UpdateNode(pNode)
+	//add file to count
+	ts = time.Now()
+	err = prover.UpdateStatus(256, false)
+	if err != nil {
+		t.Fatal("update status error", err)
+	}
+	t.Log("update prover status time", time.Since(ts))
 
-	// //add file to count
-	// ts = time.Now()
-	// err = prover.UpdateStatus(int64(len(chals))*8, false)
-	// if err != nil {
-	// 	t.Fatal("update status error", err)
-	// }
-	// t.Log("update prover status time", time.Since(ts))
-
-	// t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
+	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
 
 	//deletion proof
 	ts = time.Now()
@@ -119,10 +133,16 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("prove deletion proof time", time.Since(ts))
 
+	jdata, err := json.Marshal(delProof)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	t.Log("deletion proof data length", len(jdata))
+
 	ts = time.Now()
 	//set space challenge state
 	//err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256)
-	err = prover.SetChallengeState(key, verifier.GetNode(prover.ID).Acc, 8, 256*5)
+	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 0, 256)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
@@ -137,15 +157,22 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 9, 256*5+1)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 256+1)
 	//spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
 	t.Log("prove space time", time.Since(ts))
+
+	jdata, err = json.Marshal(spaceProof)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	t.Log("space proof data length", len(jdata))
+
 	//verify space proof
 	ts = time.Now()
-	err = verifier.VerifySpace(verifier.GetNode(prover.ID), spaceChals, spaceProof)
+	err = verifier.VerifySpace(nodes.GetNode(prover.ID), spaceChals, spaceProof)
 	if err != nil {
 		t.Fatal("verify space proof error", err)
 	}
@@ -154,27 +181,27 @@ func TestPois(t *testing.T) {
 
 	//verify deletion proof
 	ts = time.Now()
-	err = verifier.VerifyDeletion(prover.ID, delProof)
+	pNode = nodes.GetNode(prover.ID)
+	err = verifier.VerifyDeletion(&pNode, delProof)
 	if err != nil {
 		t.Fatal("verify deletion proof error", err)
 	}
 	t.Log("verify deletion proof time", time.Since(ts))
+	nodes.UpdateNode(pNode)
 
 	//add file to count
-	ts = time.Now()
-	err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
-	if err != nil {
-		t.Fatal("update count error", err)
-	}
-	t.Log("update prover status time", time.Since(ts))
-	t.Log("deletion proof updated data:", prover.GetFront(), prover.GetRear())
-
-	ts = time.Now()
-	err = prover.DeleteFiles()
-	if err != nil {
-		t.Fatal("delete files error", err)
-	}
-	t.Log("delete files time", time.Since(ts))
+	// ts = time.Now()
+	// err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
+	// if err != nil {
+	// 	t.Fatal("update count error", err)
+	// }
+	// t.Log("update prover status time", time.Since(ts))
+	// ts = time.Now()
+	// err = prover.DeleteFiles()
+	// if err != nil {
+	// 	t.Fatal("delete files error", err)
+	// }
+	// t.Log("delete files time", time.Since(ts))
 }
 
 func TestConcurrently(t *testing.T) {
@@ -199,8 +226,9 @@ func TestConcurrently(t *testing.T) {
 		t.Fatal("recovery prover error", err)
 	}
 	verifier := pois.NewVerifier(k, n, d)
+	nodes := pois.CreateNewNodes()
 	log.Println("prove acc", prover.AccManager.GetSnapshot().Accs.Value)
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 	start, ok, wt := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
 
 	var (
@@ -230,12 +258,13 @@ func TestConcurrently(t *testing.T) {
 				log.Println("get commits error", err)
 				return
 			}
-
-			if !verifier.ReceiveCommits(prover.ID, commits) {
+			pNode := nodes.GetNode(prover.ID)
+			if !verifier.ReceiveCommits(&pNode, commits) {
 				log.Println("receive commits error")
 				return
 			}
-			chals, err = verifier.CommitChallenges(prover.ID)
+			nodes.UpdateNode(pNode)
+			chals, err = verifier.CommitChallenges(pNode)
 			if err != nil {
 				log.Println("generate commit challenges error", err)
 				return
@@ -266,16 +295,18 @@ func TestConcurrently(t *testing.T) {
 	go func() {
 		for {
 			<-ok
-			err := verifier.VerifyCommitProofs(prover.ID, chals, commitProofs)
+			pNode := nodes.GetNode(prover.ID)
+			err := verifier.VerifyCommitProofs(pNode, chals, commitProofs)
 			if err != nil {
 				log.Println("verify commit proof error", err)
 				return
 			}
-			err = verifier.VerifyAcc(prover.ID, chals, accProof)
+			err = verifier.VerifyAcc(&pNode, chals, accProof)
 			if err != nil {
 				log.Println("verify acc proof error", err)
 				return
 			}
+			nodes.UpdateNode(pNode)
 			<-start
 		}
 	}()

@@ -144,20 +144,23 @@ func (p *Prover) Init(key acc.RsaKey, config Config) error {
 }
 
 func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) error {
+
 	if key.G.BitLen() == 0 || key.N.BitLen() == 0 || front < 0 ||
 		rear < 0 || front > rear || rear%(p.setLen*p.clusterSize) != 0 {
 		return errors.New("bad recovery params")
 	}
 	checkConfig(config)
+
+	//recovery front and rear
+	p.front = front
+	p.rear = rear
+
 	var err error
 	//recovery acc
 	p.AccManager, err = acc.Recovery(AccPath, key, front, rear)
 	if err != nil {
 		return errors.Wrap(err, "recovery prover error")
 	}
-	//recovery front and rear
-	p.front = front
-	p.rear = rear
 	//recovery context
 
 	generated, err := p.calcGeneratedFile(IdleFilePath)

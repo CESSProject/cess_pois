@@ -121,6 +121,9 @@ func ReadFile(path string) ([]byte, error) {
 	for {
 		n, err := out.Read(buf)
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			return nil, err
 		}
 		if _, err = buffer.Write(buf[:n]); err != nil {
