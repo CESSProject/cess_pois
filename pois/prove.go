@@ -1,10 +1,8 @@
 package pois
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math/big"
 	"os"
 	"path"
@@ -646,8 +644,6 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 
 			index := challenges[i][j]
 			if j > p.clusterSize+1 {
-				jb, _ := json.Marshal(proofs[j-2])
-				log.Println("proofs", j-2, string(jb))
 				index = int64(proofs[j-2].Parents[challenges[i][j]].Index)
 			}
 			layer := index / p.Expanders.N
