@@ -190,6 +190,42 @@ func (v *Verifier) CommitChallenges(pNode ProverNode) ([][]int64, error) {
 	return challenges, nil
 }
 
+func (v *Verifier) CommitChallengesForTest() ([][]int64, error) {
+
+	challenges := make([][]int64, IdleSetLen) //
+	start := (1 - 1) / ClusterSize
+	for i := int64(0); i < IdleSetLen; i++ { //
+		challenges[i] = make([]int64, v.Expanders.K+ClusterSize+1) //
+		challenges[i][0] = start + i + 1                           // calculate file cluster id
+		//
+		for j := 1; j <= int(ClusterSize); j++ {
+			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
+			if err != nil {
+				return nil, errors.Wrap(err, "generate commit challenges error")
+			}
+			r.Add(r, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
+			challenges[i][j] = r.Int64()
+		}
+
+		r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
+		if err != nil {
+			return nil, errors.Wrap(err, "generate commit challenges error")
+		}
+		r.Add(r, new(big.Int).SetInt64(v.Expanders.N*(v.Expanders.K-1)))
+		challenges[i][ClusterSize+1] = r.Int64()
+
+		for j := int(ClusterSize + 2); j < len(challenges[i]); j++ { //
+			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.D+1))
+			if err != nil {
+				return nil, errors.Wrap(err, "generate commit challenges error")
+			}
+			challenges[i][j] = r.Int64()
+		}
+		//
+	}
+	return challenges, nil
+}
+
 func (v *Verifier) SpaceChallenges(param int64) ([]int64, error) {
 	//Randomly select several nodes from idle files as random challenges
 	if param < SpaceChals {

@@ -1,10 +1,8 @@
 package pois
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math/big"
 	"os"
 	"path"
@@ -508,6 +506,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 	commited := p.commited
 	commitNum := p.setLen * p.clusterSize
 	if fileNum-commited < commitNum {
+		p.update.Store(false)
 		err = errors.New("bad commit data")
 		return commits, errors.Wrap(err, "get commits error")
 	}
@@ -520,6 +519,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1)
 	commits.Roots, err = util.ReadProofFile(name, rootNum, tree.DEFAULT_HASH_SIZE)
 	if err != nil {
+		p.update.Store(false)
 		return commits, errors.Wrap(err, "get commits error")
 	}
 	commits.FileIndexs = make([]int64, commitNum)
@@ -646,8 +646,8 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 
 			index := challenges[i][j]
 			if j > p.clusterSize+1 {
-				jb, _ := json.Marshal(proofs[j-2])
-				log.Println("proofs", j-2, string(jb))
+				// jb, _ := json.Marshal(proofs[j-2])
+				// log.Println("proofs", j-2, string(jb))
 				index = int64(proofs[j-2].Parents[challenges[i][j]].Index)
 			}
 			layer := index / p.Expanders.N

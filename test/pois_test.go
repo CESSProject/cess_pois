@@ -70,7 +70,7 @@ func TestPois(t *testing.T) {
 	//generate commits challenges
 	ts = time.Now()
 	chals, err := verifier.CommitChallenges(pNode)
-	//t.Log("commit chals ", chals)
+	t.Log("commit chals ", chals)
 	if err != nil {
 		t.Fatal("generate commit challenges error", err)
 	}
@@ -202,6 +202,22 @@ func TestPois(t *testing.T) {
 	// 	t.Fatal("delete files error", err)
 	// }
 	// t.Log("delete files time", time.Since(ts))
+}
+
+func TestGenChallenge(t *testing.T) {
+	k, n, d := int64(8), int64(1024*1024), int64(64)
+	verifier := pois.NewVerifier(k, n, d)
+	chals, err := verifier.CommitChallengesForTest()
+	t.Log("commit chals ", chals)
+	if err != nil {
+		t.Fatal("generate commit challenges error", err)
+	}
+}
+
+func TestGenPoisKey(t *testing.T) {
+	st := time.Now()
+	acc.RsaKeygen(2048)
+	t.Log("gen pois key time ", time.Since(st))
 }
 
 func TestConcurrently(t *testing.T) {
