@@ -506,6 +506,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 	commited := p.commited
 	commitNum := p.setLen * p.clusterSize
 	if fileNum-commited < commitNum {
+		p.update.Store(false)
 		err = errors.New("bad commit data")
 		return commits, errors.Wrap(err, "get commits error")
 	}
@@ -518,6 +519,7 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 	rootNum := int(commitNum + p.Expanders.K*p.setLen + 1)
 	commits.Roots, err = util.ReadProofFile(name, rootNum, tree.DEFAULT_HASH_SIZE)
 	if err != nil {
+		p.update.Store(false)
 		return commits, errors.Wrap(err, "get commits error")
 	}
 	commits.FileIndexs = make([]int64, commitNum)
