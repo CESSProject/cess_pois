@@ -830,6 +830,10 @@ func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, s
 				err = e
 				return
 			}
+			if node.Parents[idx]%6 != 0 {
+				pathProof.Path = nil
+				pathProof.Locs = nil
+			}
 			parentProofs[idx] = &MhtProof{
 				Index: node.Parents[idx],
 				Label: label,

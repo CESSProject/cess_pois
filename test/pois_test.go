@@ -18,7 +18,7 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*16), int64(64)
+	k, n, d := int64(8), int64(1024*1024), int64(64)
 	// key, err := ParseKey("./key")
 	// if err != nil {
 	// 	t.Fatal("parse key error", err)
@@ -70,7 +70,6 @@ func TestPois(t *testing.T) {
 	//generate commits challenges
 	ts = time.Now()
 	chals, err := verifier.CommitChallenges(pNode)
-	t.Log("commit chals ", chals)
 	if err != nil {
 		t.Fatal("generate commit challenges error", err)
 	}
@@ -95,7 +94,7 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("data converted to json error", err)
 	}
-	t.Log("commit and acc proof data length", len(jdata1)+len(jdata2))
+	t.Log("commit and acc proof data length", len(jdata1), len(jdata2))
 	//verify commit proof
 	ts = time.Now()
 	err = verifier.VerifyCommitProofs(nodes.GetNode(prover.ID), chals, commitProofs)
@@ -202,16 +201,6 @@ func TestPois(t *testing.T) {
 	// 	t.Fatal("delete files error", err)
 	// }
 	// t.Log("delete files time", time.Since(ts))
-}
-
-func TestGenChallenge(t *testing.T) {
-	k, n, d := int64(8), int64(1024*1024), int64(64)
-	verifier := pois.NewVerifier(k, n, d)
-	chals, err := verifier.CommitChallengesForTest()
-	t.Log("commit chals ", chals)
-	if err != nil {
-		t.Fatal("generate commit challenges error", err)
-	}
 }
 
 func TestGenPoisKey(t *testing.T) {
@@ -341,6 +330,7 @@ func ToBytes(key acc.RsaKey) []byte {
 	copy(data[:16], buf.Bytes())
 	copy(data[16:16+nl], n)
 	copy(data[16+nl:], g)
+
 	return data
 }
 

@@ -132,12 +132,6 @@ func (n Nodes) LogoutProverNodeGently(ID []byte) ([]byte, int64, int64) {
 
 func (v *Verifier) ReceiveCommits(pNode *ProverNode, commits Commits) bool {
 
-	for i := 0; i < len(commits.FileIndexs); i++ {
-		if commits.FileIndexs[i] <= pNode.Rear { //
-			return false
-		}
-	}
-	//
 	rootNum := int((ClusterSize+v.Expanders.K)*IdleSetLen + 1)
 	if len(commits.Roots) != rootNum {
 		return false
@@ -158,42 +152,6 @@ func (v *Verifier) CommitChallenges(pNode ProverNode) ([][]int64, error) {
 
 	challenges := make([][]int64, IdleSetLen) //
 	start := (pNode.CommitsBuf.FileIndexs[0] - 1) / ClusterSize
-	for i := int64(0); i < IdleSetLen; i++ { //
-		challenges[i] = make([]int64, v.Expanders.K+ClusterSize+1) //
-		challenges[i][0] = start + i + 1                           // calculate file cluster id
-		//
-		for j := 1; j <= int(ClusterSize); j++ {
-			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
-			if err != nil {
-				return nil, errors.Wrap(err, "generate commit challenges error")
-			}
-			r.Add(r, new(big.Int).SetInt64(v.Expanders.N*v.Expanders.K))
-			challenges[i][j] = r.Int64()
-		}
-
-		r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.N))
-		if err != nil {
-			return nil, errors.Wrap(err, "generate commit challenges error")
-		}
-		r.Add(r, new(big.Int).SetInt64(v.Expanders.N*(v.Expanders.K-1)))
-		challenges[i][ClusterSize+1] = r.Int64()
-
-		for j := int(ClusterSize + 2); j < len(challenges[i]); j++ { //
-			r, err := rand.Int(rand.Reader, new(big.Int).SetInt64(v.Expanders.D+1))
-			if err != nil {
-				return nil, errors.Wrap(err, "generate commit challenges error")
-			}
-			challenges[i][j] = r.Int64()
-		}
-		//
-	}
-	return challenges, nil
-}
-
-func (v *Verifier) CommitChallengesForTest() ([][]int64, error) {
-
-	challenges := make([][]int64, IdleSetLen) //
-	start := (1 - 1) / ClusterSize
 	for i := int64(0); i < IdleSetLen; i++ { //
 		challenges[i] = make([]int64, v.Expanders.K+ClusterSize+1) //
 		challenges[i][0] = start + i + 1                           // calculate file cluster id
@@ -326,13 +284,15 @@ func (v *Verifier) VerifyCommitProofs(pNode ProverNode, chals [][]int64, proofs 
 					} else {
 						root = pNode.CommitsBuf.Roots[(logicalLayer-1)*IdleSetLen+(chals[i][0]-1)%IdleSetLen]
 					}
-					pathProof := tree.PathProof{
-						Locs: p.Locs,
-						Path: p.Paths,
-					}
-					if !tree.VerifyPathProof(root, p.Label, pathProof) {
-						err := errors.New("verify parent path proof error")
-						return errors.Wrap(err, "verify commit proofs error")
+					if p.Index%6 == 0 {
+						pathProof := tree.PathProof{
+							Locs: p.Locs,
+							Path: p.Paths,
+						}
+						if !tree.VerifyPathProof(root, p.Label, pathProof) {
+							err := errors.New("verify parent path proof error")
+							return errors.Wrap(err, "verify commit proofs error")
+						}
 					}
 					copy(label[size:size+hashSize], p.Label)
 					size += hashSize
