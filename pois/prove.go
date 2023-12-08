@@ -498,13 +498,6 @@ func (p *Prover) GetIdleFileSetCommits() (Commits, error) {
 		return commits, errors.Wrap(err, "get commits error")
 	}
 
-	//--------------------------------------
-	if p.delete.Load() {
-		err := errors.New("data is being updated, please try again")
-		return commits, errors.Wrap(err, "get commits error")
-	}
-	//--------------------------------------
-
 	if !p.update.CompareAndSwap(false, true) {
 		err = errors.New("lock is occupied")
 		return commits, errors.Wrap(err, "get commits error")
@@ -956,13 +949,6 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 	}
 	p.delete.Store(true)
 
-	//--------------------------------------
-	if p.update.Load() {
-		err := errors.New("data is being updated, please try again")
-		return nil, errors.Wrap(err, "prove deletion error")
-	}
-	//--------------------------------------
-
 	p.rw.Lock()
 	if p.rear-p.front < num {
 		p.rw.Unlock()
@@ -986,13 +972,6 @@ func (p *Prover) ProveDeletion(num int64) (*DeletionProof, error) {
 		mht.CalcLightMhtWithAux(aux)
 		roots[i-1] = mht.GetRoot()
 	}
-
-	//--------------------------------------
-	if p.update.Load() {
-		err := errors.New("data is being updated, please try again")
-		return nil, errors.Wrap(err, "prove deletion error")
-	}
-	//--------------------------------------
 
 	wits, accs, err := p.AccManager.DeleteElementsAndProof(int(num))
 	if err != nil {
