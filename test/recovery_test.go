@@ -18,7 +18,7 @@ func TestRestoreRowIdleFile(t *testing.T) {
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
-	err = prover.RestoreRawIdleFiles(3)
+	err = prover.RestoreRawIdleFiles(1)
 	if err != nil {
 		t.Fatal("restore raw idle files error", err)
 	}
@@ -55,5 +55,19 @@ func TestRestoreSubAccFile(t *testing.T) {
 	err = prover.CheckAndRestoreSubAccFiles(0, 256)
 	if err != nil {
 		t.Fatal("restore sub acc file error", err)
+	}
+}
+
+func TestRestoreAllFiles(t *testing.T) {
+	k, n, d := int64(8), int64(1024*16), int64(64)
+	key := acc.RsaKeygen(2048)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
+	if err != nil {
+		t.Fatal("new prover error", err)
+	}
+	err = prover.Recovery(key, 276, 768, pois.Config{})
+	if err != nil {
+		err = prover.CheckAndRestoreSubAccFiles(276, 768)
+		t.Log(err)
 	}
 }

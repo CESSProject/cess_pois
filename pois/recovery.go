@@ -64,17 +64,18 @@ func (prover *Prover) RestoreSubAccFiles(setId int64) error {
 		err := errors.New("bad set id")
 		return errors.Wrap(err, "restore sub acc files error")
 	}
-	roots, err := prover.CheckFilesAndGetTreeRoots(setId)
-	if err != nil {
-		return errors.Wrap(err, "restore sub acc files error")
-	}
-	if len(roots) == 0 {
+	roots, _ := prover.CheckFilesAndGetTreeRoots(setId)
+	if len(roots) != acc.DEFAULT_ELEMS_NUM {
 		err := prover.RestoreRawIdleFiles(setId)
 		if err != nil {
 			return errors.Wrap(err, "restore sub acc files error")
 		}
+		roots, err = prover.CheckFilesAndGetTreeRoots(setId)
+		if err != nil {
+			return errors.Wrap(err, "restore sub acc files error")
+		}
 	}
-	err = prover.AccManager.RestoreSubAccFile(int(setId-1), roots)
+	err := prover.AccManager.RestoreSubAccFile(int(setId-1), roots)
 	if err != nil {
 		return errors.Wrap(err, "restore sub acc files error")
 	}
@@ -108,6 +109,7 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 		IdleFilePath,
 		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, setId),
 	)
+
 	auxFSize := expanders.DEFAULT_AUX_SIZE * tree.DEFAULT_HASH_SIZE
 	entries, err := os.ReadDir(filesDir)
 	if err != nil {
