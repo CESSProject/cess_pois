@@ -482,10 +482,10 @@ func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error
 		if err != nil {
 			return nil, errors.Wrap(err, "get witness chains error")
 		}
-		if indexs[i]%DEFAULT_ELEMS_NUM != 0 && i-1 < len(indexs) {
-			chains[i].Acc.Wit = nil
-			chains[i].Acc.Acc = nil
-		}
+		// if indexs[i]%DEFAULT_ELEMS_NUM != 0 && i-1 < len(indexs) {
+		// 	chains[i].Acc.Wit = nil
+		// 	chains[i].Acc.Acc = nil
+		// }
 	}
 	return chains, nil
 }
