@@ -20,6 +20,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	DEFAULT_CHAL_GROUP     = 4
+	DEFAULT_CHAL_GROUP_NUM = 256
+)
+
 var (
 	FileSize       int64  = int64(expanders.HashSize)
 	AccPath        string = acc.DEFAULT_PATH
@@ -226,6 +231,13 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 	p.chainState.delCh = make(chan struct{})
 	p.chainState.challenging = true
 	return nil
+}
+
+func (p *Prover) SetChallengeStateForTest(front, rear int64) {
+	p.chainState = &ChainState{
+		Rear:  rear,
+		Front: front,
+	}
 }
 
 // GenerateIdleFileSet generate num=(p.setLen*p.clusterSize(==k)) idle files, num must be consistent with the data given by CESS, otherwise it cannot pass the verification

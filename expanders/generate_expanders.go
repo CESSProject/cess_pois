@@ -21,19 +21,19 @@ func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count ...int6
 		return
 	}
 
-	lens := len(MinerID) + 8*17 + len(Count)*8
+	lens := len(MinerID) + 8 + len(Count)*8 + 8*16
 	content := make([]byte, lens)
 	util.CopyData(content, MinerID, GetBytes(Count), GetBytes(layer))
 	node.AddParent(node.Index - NodeType(expanders.N))
 
 	plate := make([][]byte, 16)
-	for i := int64(0); i < expanders.D; i += 16 {
+	for i := int64(0); i < expanders.D; i += 16 { //D must be a multiple of 16
 		//add index to conent
 		for j := int64(0); j < 16; j++ {
 			plate[j] = GetBytes(i + j)
 		}
 		util.CopyData(content[lens-8*16:], plate...)
-		hash := GetHash(content)
+		hash := GetHash(content) //calc the hash once,gen 16 parent nodes
 		s, p := 0, NodeType(0)
 		for j := 0; j < 16; {
 			if s < 4 && j < 15 {
