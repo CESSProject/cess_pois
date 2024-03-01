@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math/big"
 	"sync"
 
 	"github.com/CESSProject/cess_pois/util"
@@ -137,4 +138,15 @@ func BytesToNodeValue(data []byte, Max int64) NodeType {
 	}
 	v %= Max
 	return NodeType(v)
+}
+
+func BytesToInt64(data []byte, max int64) int64 {
+	value := big.NewInt(0).SetBytes(data)
+	bigMax := big.NewInt(max)
+	value = value.Mod(value, bigMax)
+	iValue := value.Int64()
+	if iValue < 0 {
+		iValue = -iValue
+	}
+	return iValue % max
 }

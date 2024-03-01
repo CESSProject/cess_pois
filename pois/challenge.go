@@ -73,10 +73,11 @@ func (p *Prover) NewChallengeHandle(teeID []byte, chal []int64) func([]byte) (in
 
 	bytesChal := expanders.GetBytes(chal)
 	frontSize := len(p.ID) + len(teeID) + len(bytesChal)
-	source := make([]byte, 0, frontSize+32)
+	source := make([]byte, 0, frontSize+64)
 	source = append(source, p.ID...)
 	source = append(source, teeID...)
 	source = append(source, bytesChal...)
+	source = append(source, make([]byte, 64)...)
 
 	fileNum := p.setLen * p.clusterSize
 	number := int64(DEFAULT_CHAL_GROUP_NUM)
@@ -93,8 +94,7 @@ func (p *Prover) NewChallengeHandle(teeID []byte, chal []int64) func([]byte) (in
 			copy(source[frontSize:], priorHash)
 		}
 		hash := expanders.GetHash(source)
-		v := int64(expanders.BytesToNodeValue(hash, groupSize-(number/fileNum)))
-
+		v := int64(expanders.BytesToInt64(hash, groupSize-(number/fileNum)))
 		left = (start + count*groupSize + v) * fileNum
 		right = (left/fileNum)*fileNum + number
 		if left < front {
@@ -110,10 +110,11 @@ func NewChallengeHandle(minerID, teeID []byte, chal []int64, front, rear, proofN
 
 	bytesChal := expanders.GetBytes(chal)
 	frontSize := len(minerID) + len(teeID) + len(bytesChal)
-	source := make([]byte, 0, frontSize+32)
+	source := make([]byte, 0, frontSize+64)
 	source = append(source, minerID...)
 	source = append(source, teeID...)
 	source = append(source, bytesChal...)
+	source = append(source, make([]byte, 64)...)
 
 	fileNum := int64(256)
 	groupSize := int64(16)
@@ -128,7 +129,7 @@ func NewChallengeHandle(minerID, teeID []byte, chal []int64, front, rear, proofN
 			copy(source[frontSize:], priorHash)
 		}
 		hash := expanders.GetHash(source)
-		v := int64(expanders.BytesToNodeValue(hash, groupSize-1))
+		v := int64(expanders.BytesToInt64(hash, groupSize-1))
 
 		l := (start + count*groupSize + v) * fileNum
 		r := (l/fileNum)*fileNum + 256

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
 	"github.com/CESSProject/cess_pois/pois"
 )
 
@@ -20,27 +21,44 @@ func TestChellenges(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	verifier := pois.NewVerifier(k, n, d)
-	spaceChals, err := verifier.SpaceChallenges(8)
-	if err != nil {
-		t.Fatal("generate space chals error", err)
-	}
+	spaceChals := []int64{9263791, 8785184, 8430062, 9266903, 8693449, 9054566, 8878802, 9038905}
 	prover.SetChallengeStateForTest(279, 32768)
 	proofHandle := prover.NewChallengeHandle([]byte("test tee id"), spaceChals)
-	t.Log(279 % 256)
+
+	log.Println("miner id:", []byte("test miner id"))
+	log.Println("tee id:", []byte("test tee id"))
+	log.Println("challenges:", spaceChals)
+	log.Println("front:", 279, "rear:", 32768, "proof num:", 7)
+
 	verifyHandle := pois.NewChallengeHandle([]byte("test miner id"), []byte("test tee id"), spaceChals, 279, 32768, 7)
 	if verifyHandle == nil {
 		t.Log("error proof number")
 		return
 	}
+	var lefts, rights []int64
 	var prior []byte
 	for {
 		left, right := proofHandle(prior)
 		if left == right {
 			break
 		}
-		log.Println("left", left, "right", right)
-		log.Println("test result", verifyHandle(prior, left, right))
-		prior = []byte(fmt.Sprintln(left, right))
+		lefts = append(lefts, left)
+		rights = append(rights, right)
+		prior = expanders.GetHash([]byte(fmt.Sprintln(left, right)))
+		log.Println("prior", prior)
 	}
+	log.Println(lefts)
+	log.Println(rights)
+}
+
+func TestChange(t *testing.T) {
+	data := []byte{36, 54, 193, 23, 107, 2, 54, 61, 245, 167, 147, 116, 249, 242, 164, 126, 212, 107, 40, 47, 231, 4, 16, 78, 82, 49, 87, 150, 137, 190, 180, 25, 163, 193, 25, 179, 162, 146, 151, 251, 255, 196, 160, 3, 115, 180, 173, 58, 0, 55, 186, 112, 231, 5, 114, 82, 10, 162, 120, 145, 93, 150, 54, 78}
+	log.Println("value", expanders.BytesToInt64(data, 15))
+}
+
+func TestFuncGetBytes(t *testing.T) {
+	chal := []int64{9263791, 8785184, 8430062, 9266903, 8693449, 9054566, 8878802, 9038905}
+	//var data int64 = 10
+	bytes := expanders.GetBytes(chal)
+	log.Println(bytes)
 }
