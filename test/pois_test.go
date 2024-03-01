@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/big"
 	_ "net/http/pprof"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
 	"github.com/CESSProject/cess_pois/pois"
 	"github.com/CESSProject/cess_pois/util"
 )
@@ -203,6 +205,117 @@ func TestPois(t *testing.T) {
 	// t.Log("delete files time", time.Since(ts))
 }
 
+func TestNewChallenge(t *testing.T) {
+	k, n, d := int64(8), int64(1024*16), int64(64)
+	// key, err := ParseKey("./key")
+	// if err != nil {
+	// 	t.Fatal("parse key error", err)
+	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
+	if err != nil {
+		t.Fatal("new prover error", err)
+	}
+	err = prover.Recovery(key, 0, 0, pois.Config{})
+	//err = prover.Init(key, pois.Config{})
+	if err != nil {
+		t.Fatal("recovery prover error", err)
+	}
+	verifier := pois.NewVerifier(k, n, d)
+
+	blockNum := 19 + 32
+	err = prover.GenerateIdleFileSets(blockNum)
+	if err != nil {
+		t.Fatal("generate idle file set error", err)
+	}
+	count := int64(0)
+	nodes := pois.CreateNewNodes()
+	for i := 0; i < blockNum; i++ {
+		commits, err := prover.GetIdleFileSetCommits()
+		if err != nil {
+			t.Fatal("get commits error", err)
+		}
+		nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, count)
+		pNode := nodes.GetNode(prover.ID)
+		if !verifier.ReceiveCommits(&pNode, commits) {
+			t.Fatal("receive commits error")
+		}
+
+		nodes.UpdateNode(pNode)
+		//generate commits challenges
+		chals, err := verifier.CommitChallenges(pNode)
+		if err != nil {
+			t.Fatal("generate commit challenges error", err)
+		}
+
+		//prove commit and acc
+		commitProofs, accProof, err := prover.ProveCommitAndAcc(chals)
+		if err != nil {
+			t.Fatal("prove commit error", err)
+		}
+		if err == nil && commitProofs == nil && accProof == nil {
+			t.Log("update or delete task is already running")
+		}
+		//verify commit proof
+		err = verifier.VerifyCommitProofs(nodes.GetNode(prover.ID), chals, commitProofs)
+		if err != nil {
+			t.Fatal("verify commit proof error", err)
+		}
+
+		//verify acc proof
+		pNode = nodes.GetNode(prover.ID)
+		err = verifier.VerifyAcc(&pNode, chals, accProof)
+		if err != nil {
+			t.Fatal("verify acc proof error", err)
+		}
+
+		nodes.UpdateNode(pNode)
+		//add file to count
+		err = prover.UpdateStatus(256, false)
+		if err != nil {
+			t.Fatal("update status error", err)
+		}
+		count += 256
+	}
+
+	err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256*int64(blockNum))
+	if err != nil {
+		t.Fatal("set challenge state error", err)
+	}
+
+	spaceChals, err := verifier.SpaceChallenges(8)
+	if err != nil {
+		t.Fatal("generate space chals error", err)
+	}
+
+	handle := prover.NewChallengeHandle([]byte("test tee id"), spaceChals)
+	vhandle := pois.NewChallengeHandle([]byte("test miner id"), []byte("test tee id"), spaceChals, 0, int64(blockNum), int64(blockNum/16))
+	var prior []byte
+	for {
+		left, right := handle(prior)
+		if left == right {
+			break
+		}
+		spaceProof, err := prover.ProveSpace(spaceChals, left, right+1)
+		if err != nil {
+			t.Fatal("prove space error", err)
+		}
+		if err != nil {
+			t.Fatal("data converted to json error", err)
+		}
+		err = verifier.VerifySpace(nodes.GetNode(prover.ID), spaceChals, spaceProof)
+		if err != nil {
+			t.Fatal("verify space proof error", err)
+		}
+		t.Log("check result", vhandle(prior, left, right))
+		prior = expanders.GetHash([]byte(fmt.Sprintln(left, right)))
+	}
+}
+
 func TestGenPoisKey(t *testing.T) {
 	st := time.Now()
 	acc.RsaKeygen(2048)
@@ -281,7 +394,7 @@ func TestConcurrently(t *testing.T) {
 				log.Println("prove commit error", err)
 				return
 			}
-			if err == nil && commitProofs == nil && accProof == nil {
+			if commitProofs == nil && accProof == nil {
 				log.Println("update or delete task is already running")
 				return
 			}

@@ -911,9 +911,7 @@ func (p *Prover) ProveSpace(challenges []int64, left, right int64) (*SpaceProof,
 					idx := int(challenges[j] % p.Expanders.N)
 					pathProof, err := tree.GetPathProofWithAux(*data, aux, idx, expanders.HashSize)
 					if err != nil {
-						if err != nil {
-							return
-						}
+						return
 					}
 					label := make([]byte, expanders.HashSize)
 					copy(label, (*data)[idx*expanders.HashSize:(idx+1)*expanders.HashSize])

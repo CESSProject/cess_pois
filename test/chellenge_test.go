@@ -35,20 +35,15 @@ func TestChellenges(t *testing.T) {
 		t.Log("error proof number")
 		return
 	}
-	var lefts, rights []int64
 	var prior []byte
 	for {
 		left, right := proofHandle(prior)
 		if left == right {
 			break
 		}
-		lefts = append(lefts, left)
-		rights = append(rights, right)
+		t.Log(verifyHandle(prior, left, right))
 		prior = expanders.GetHash([]byte(fmt.Sprintln(left, right)))
-		log.Println("prior", prior)
 	}
-	log.Println(lefts)
-	log.Println(rights)
 }
 
 func TestChange(t *testing.T) {
