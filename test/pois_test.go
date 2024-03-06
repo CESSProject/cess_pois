@@ -227,7 +227,7 @@ func TestNewChallenge(t *testing.T) {
 	}
 	verifier := pois.NewVerifier(k, n, d)
 
-	blockNum := 19 + 32
+	blockNum := 19 + 17
 	err = prover.GenerateIdleFileSets(blockNum)
 	if err != nil {
 		t.Fatal("generate idle file set error", err)
@@ -303,9 +303,6 @@ func TestNewChallenge(t *testing.T) {
 		spaceProof, err := prover.ProveSpace(spaceChals, left, right+1)
 		if err != nil {
 			t.Fatal("prove space error", err)
-		}
-		if err != nil {
-			t.Fatal("data converted to json error", err)
 		}
 		err = verifier.VerifySpace(nodes.GetNode(prover.ID), spaceChals, spaceProof)
 		if err != nil {
