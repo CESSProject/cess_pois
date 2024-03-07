@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	_ "net/http/pprof"
 	"testing"
 	"time"
@@ -20,21 +21,21 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("parse key error", err)
-	}
-	// key := acc.RsaKeygen(2048)
-	// err := SaveKey("./key", key)
+	k, n, d := int64(8), int64(1024*16), int64(64)
+	// key, err := ParseKey("./key")
 	// if err != nil {
-	// 	t.Fatal("save key error", err)
+	// 	t.Fatal("parse key error", err)
 	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 256, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
@@ -48,6 +49,11 @@ func TestPois(t *testing.T) {
 		t.Fatal("generate idle file set error", err)
 	}
 	t.Log("generate idle file set time", time.Since(ts))
+
+	err = http.ListenAndServe("localhost:6060", nil)
+	if err != nil {
+		t.Log("run pprof server error", err)
+	}
 
 	// get commits
 	ts = time.Now()
@@ -143,7 +149,7 @@ func TestPois(t *testing.T) {
 	ts = time.Now()
 	//set space challenge state
 	//err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256)
-	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 0, 512)
+	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 0, 256)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
@@ -158,7 +164,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1, 512+1)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 256+1)
 	//spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)
@@ -207,32 +213,34 @@ func TestPois(t *testing.T) {
 
 func TestNewChallenge(t *testing.T) {
 	k, n, d := int64(8), int64(1024*16), int64(64)
-	// key, err := ParseKey("./key")
-	// if err != nil {
-	// 	t.Fatal("parse key error", err)
-	// }
-	key := acc.RsaKeygen(2048)
-	err := SaveKey("./key", key)
+	key, err := ParseKey("./key")
 	if err != nil {
-		t.Fatal("save key error", err)
+		t.Fatal("parse key error", err)
 	}
+	// key := acc.RsaKeygen(2048)
+	// err := SaveKey("./key", key)
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
+	blockNum := 16 + 13
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 0, pois.Config{})
+	err = prover.Recovery(key, 0, 19*256, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
 	verifier := pois.NewVerifier(k, n, d)
+	// nodes := pois.CreateNewNodes()
+	// nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256*int64(blockNum))
 
-	blockNum := 19 + 17
-	err = prover.GenerateIdleFileSets(blockNum)
+	err = prover.GenerateIdleFileSets(blockNum - 19)
 	if err != nil {
 		t.Fatal("generate idle file set error", err)
 	}
-	count := int64(0)
+	count := int64(0) + 19*256
 	nodes := pois.CreateNewNodes()
 	for i := 0; i < blockNum; i++ {
 		commits, err := prover.GetIdleFileSetCommits()
@@ -293,11 +301,12 @@ func TestNewChallenge(t *testing.T) {
 	}
 
 	handle := prover.NewChallengeHandle([]byte("test tee id"), spaceChals)
-	vhandle := pois.NewChallengeHandle([]byte("test miner id"), []byte("test tee id"), spaceChals, 0, int64(blockNum), int64(blockNum/16))
+	vhandle := pois.NewChallengeHandle([]byte("test miner id"), []byte("test tee id"), spaceChals, 0, int64(blockNum)*256, int64(blockNum/16)+1)
 	var prior []byte
 	for {
 		left, right := handle(prior)
 		if left == right {
+			t.Log("left==right")
 			break
 		}
 		spaceProof, err := prover.ProveSpace(spaceChals, left, right+1)

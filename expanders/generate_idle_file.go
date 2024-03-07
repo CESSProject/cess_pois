@@ -167,7 +167,9 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 
 	//return memory space
 	for i := 0; i < int(expanders.K/2); i++ {
-		expanders.FilePool.Put(elder[i])
+		if elder[i] != nil {
+			expanders.FilePool.Put(elder[i])
+		}
 	}
 	//calculate new dir name
 	hash = sha256.New()

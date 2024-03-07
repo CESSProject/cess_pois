@@ -2,10 +2,12 @@ package pois
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/CESSProject/cess_pois/acc"
 	"github.com/CESSProject/cess_pois/expanders"
@@ -99,6 +101,54 @@ func (prover *Prover) CheckAndRestoreSubAccFiles(front, rear int64) error {
 		if err != nil {
 			return errors.Wrap(err, "check and restore sub acc files error")
 		}
+	}
+	return nil
+}
+
+// CheckAndRestoredIdleData is used to recover idle data in parallel
+func (prover *Prover) CheckAndRestoreIdleData(front, rear int64, tNum int) error {
+
+	if front < 0 || front > rear {
+		err := errors.New("bad front and rear value")
+		return errors.Wrap(err, "check and restore sub acc files error")
+	}
+	start := front/acc.DEFAULT_ELEMS_NUM + 1
+	end := rear / acc.DEFAULT_ELEMS_NUM
+	ch := make(chan int64, end-start+1)
+	if tNum > len(ch) {
+		tNum = len(ch)
+	}
+	for i := start; i <= end; i++ {
+		ch <- i
+	}
+	close(ch)
+	wg := sync.WaitGroup{}
+	wg.Add(tNum)
+	var tErr error
+	for j := 0; j < tNum; j++ {
+		go func() {
+			defer wg.Done()
+			for {
+				i, ok := <-ch
+				if !ok {
+					break
+				}
+				fpath := path.Join(prover.AccManager.GetFilePath(), fmt.Sprintf("%s-%d", acc.DEFAULT_NAME, i-1))
+				if _, err := os.Stat(fpath); err == nil {
+					continue
+				}
+				err := prover.RestoreSubAccFiles(i)
+				if err != nil {
+					tErr = errors.Wrap(err, "check and restore sub acc files error")
+					log.Println(tErr)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if tErr != nil {
+		return tErr
 	}
 	return nil
 }

@@ -84,19 +84,23 @@ func (p *Prover) NewChallengeHandle(teeID []byte, chal []int64) func([]byte) (in
 
 	front, rear := p.chainState.Front, p.chainState.Rear
 	groupSize := 16 * (number / fileNum)
-	start, count, total := front/fileNum, int64(0), (rear-front+front%fileNum)/(fileNum*groupSize)
+	start, count, total := front/fileNum, int64(0), (rear-front+front%fileNum-1)/(fileNum*groupSize)+1
 
 	return func(priorHash []byte) (left int64, right int64) {
+		max := groupSize - (number / fileNum)
 		if count >= total {
 			return 0, 0
+		}
+		if count == total-1 {
+			max = rear/fileNum - (start + count*groupSize)
 		}
 		if len(priorHash) > 0 {
 			copy(source[frontSize:], priorHash)
 		}
 		hash := expanders.GetHash(source)
-		v := int64(expanders.BytesToInt64(hash, groupSize-(number/fileNum)))
+		v := int64(expanders.BytesToInt64(hash, max))
 		left = (start+count*groupSize+v)*fileNum + 1
-		right = (left/fileNum)*fileNum + number
+		right = (left/fileNum + 1) * fileNum
 		if left < front {
 			left = front + 1
 		}
@@ -118,7 +122,7 @@ func NewChallengeHandle(minerID, teeID []byte, chal []int64, front, rear, proofN
 
 	fileNum := int64(256)
 	groupSize := int64(16)
-	start, count, total := front/fileNum, int64(0), (rear-front+front%fileNum)/(fileNum*groupSize)
+	start, count, total := front/fileNum, int64(0), (rear-front+front%fileNum-1)/(fileNum*groupSize)+1
 
 	if total > proofNum {
 		return nil
@@ -128,11 +132,15 @@ func NewChallengeHandle(minerID, teeID []byte, chal []int64, front, rear, proofN
 		if len(priorHash) > 0 {
 			copy(source[frontSize:], priorHash)
 		}
+		max := groupSize - 1
+		if count == total-1 {
+			max = rear/fileNum - (start + count*groupSize)
+		}
 		hash := expanders.GetHash(source)
-		v := int64(expanders.BytesToInt64(hash, groupSize-1))
+		v := int64(expanders.BytesToInt64(hash, max))
 
 		l := (start+count*groupSize+v)*fileNum + 1
-		r := (l/fileNum)*fileNum + 256
+		r := (l/fileNum + 1) * fileNum
 		if l < front {
 			l = front + 1
 		}
