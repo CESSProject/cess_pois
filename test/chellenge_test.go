@@ -1,6 +1,7 @@
 package test
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log"
 	"testing"
@@ -56,4 +57,9 @@ func TestFuncGetBytes(t *testing.T) {
 	//var data int64 = 10
 	bytes := expanders.GetBytes(chal)
 	log.Println(bytes)
+}
+
+func TestHexString(t *testing.T) {
+	hash := []byte{232, 48, 44, 108, 119, 129, 206, 230, 197, 99, 68, 187, 59, 202, 175, 159, 104, 171, 230, 86, 225, 77, 55, 75, 181, 33, 195, 253, 16, 156, 235, 136}
+	t.Log(hex.EncodeToString(hash))
 }

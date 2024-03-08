@@ -100,7 +100,7 @@ func (p *Prover) NewChallengeHandle(teeID []byte, chal []int64) func([]byte) (in
 		hash := expanders.GetHash(source)
 		v := int64(expanders.BytesToInt64(hash, max))
 		left = (start+count*groupSize+v)*fileNum + 1
-		right = (left/fileNum + 1) * fileNum
+		right = ((left-1)/fileNum+1)*fileNum + 1
 		if left < front {
 			left = front + 1
 		}
@@ -140,7 +140,7 @@ func NewChallengeHandle(minerID, teeID []byte, chal []int64, front, rear, proofN
 		v := int64(expanders.BytesToInt64(hash, max))
 
 		l := (start+count*groupSize+v)*fileNum + 1
-		r := (l/fileNum + 1) * fileNum
+		r := ((l-1)/fileNum+1)*fileNum + 1
 		if l < front {
 			l = front + 1
 		}
