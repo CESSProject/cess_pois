@@ -1,6 +1,7 @@
 package test
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -18,33 +19,42 @@ func TestChellenges(t *testing.T) {
 	if err != nil {
 		t.Fatal("save key error", err)
 	}
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
+	mienrId := []byte{172, 72, 249, 160, 225, 118, 111, 74, 205, 240, 162, 201, 102, 196, 178, 76, 7, 50, 162, 126, 116, 46, 247, 232, 181, 119, 46, 203, 110, 186, 78, 53}
+	prover, err := pois.NewProver(k, n, d, mienrId, 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	spaceChals := []int64{9263791, 8785184, 8430062, 9266903, 8693449, 9054566, 8878802, 9038905}
-	prover.SetChallengeStateForTest(279, 32768)
-	proofHandle := prover.NewChallengeHandle([]byte("test tee id"), spaceChals)
 
-	log.Println("miner id:", []byte("test miner id"))
-	log.Println("tee id:", []byte("test tee id"))
+	teeId := make([]byte, 32)
+	//teeId:=[]byte("test tee id")
+	spaceChals := []int64{1312374, 1324354, 1316860, 1317539, 1324534, 1315993, 1326482, 1320953}
+	prover.SetChallengeStateForTest(0, 4864)
+	proofHandle := prover.NewChallengeHandle(teeId, spaceChals)
+
+	log.Println("miner id:", mienrId)
+	log.Println("tee id:", teeId)
 	log.Println("challenges:", spaceChals)
-	log.Println("front:", 279, "rear:", 32768, "proof num:", 7)
-
-	verifyHandle := pois.NewChallengeHandle([]byte("test miner id"), []byte("test tee id"), spaceChals, 279, 32768, 7)
+	log.Println("front:", 0, "rear:", 4864, "proof num:", 8)
+	verifyHandle := pois.NewChallengeHandle(mienrId, teeId, spaceChals, 0, 4864, 2)
 	if verifyHandle == nil {
 		t.Log("error proof number")
 		return
 	}
 	var prior []byte
+	var lefts, rights []int64
 	for {
 		left, right := proofHandle(prior)
 		if left == right {
 			break
 		}
+		lefts = append(lefts, left)
+		rights = append(rights, right)
 		t.Log(verifyHandle(prior, left, right))
+		t.Log("prior", prior)
 		prior = expanders.GetHash([]byte(fmt.Sprintln(left, right)))
 	}
+	t.Log("lefts", lefts)
+	t.Log("rights", rights)
 }
 
 func TestChange(t *testing.T) {
@@ -62,4 +72,11 @@ func TestFuncGetBytes(t *testing.T) {
 func TestHexString(t *testing.T) {
 	hash := []byte{232, 48, 44, 108, 119, 129, 206, 230, 197, 99, 68, 187, 59, 202, 175, 159, 104, 171, 230, 86, 225, 77, 55, 75, 181, 33, 195, 253, 16, 156, 235, 136}
 	t.Log(hex.EncodeToString(hash))
+}
+
+func TestCalcHash(t *testing.T) {
+	data := []byte{}
+	hash := sha256.New()
+	hash.Write(data)
+	t.Log(hash.Sum(nil))
 }

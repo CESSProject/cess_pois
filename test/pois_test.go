@@ -222,12 +222,12 @@ func TestNewChallenge(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal("save key error", err)
 	// }
-	blockNum := 16 + 13
+	blockNum := 3
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 0, 19*256, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
@@ -236,11 +236,11 @@ func TestNewChallenge(t *testing.T) {
 	// nodes := pois.CreateNewNodes()
 	// nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256*int64(blockNum))
 
-	err = prover.GenerateIdleFileSets(blockNum - 19)
+	err = prover.GenerateIdleFileSets(blockNum)
 	if err != nil {
 		t.Fatal("generate idle file set error", err)
 	}
-	count := int64(0) + 19*256
+	count := int64(0)
 	nodes := pois.CreateNewNodes()
 	for i := 0; i < blockNum; i++ {
 		commits, err := prover.GetIdleFileSetCommits()
@@ -300,8 +300,9 @@ func TestNewChallenge(t *testing.T) {
 		t.Fatal("generate space chals error", err)
 	}
 
-	handle := prover.NewChallengeHandle([]byte("test tee id"), spaceChals)
-	vhandle := pois.NewChallengeHandle([]byte("test miner id"), []byte("test tee id"), spaceChals, 0, int64(blockNum)*256, int64(blockNum/16)+1)
+	teeId := make([]byte, 32)
+	handle := prover.NewChallengeHandle(teeId, spaceChals)
+	vhandle := pois.NewChallengeHandle([]byte("test miner id"), teeId, spaceChals, 0, int64(blockNum)*256, int64(blockNum/16)+1)
 	var prior []byte
 	for {
 		left, right := handle(prior)
