@@ -114,14 +114,13 @@ func (prover *Prover) CheckAndRestoreIdleData(front, rear int64, tNum int) error
 	}
 	start := front/acc.DEFAULT_ELEMS_NUM + 1
 	end := rear / acc.DEFAULT_ELEMS_NUM
-	ch := make(chan int64, end-start+1)
-	if tNum > len(ch) {
-		tNum = len(ch)
-	}
-	for i := start; i <= end; i++ {
-		ch <- i
-	}
-	close(ch)
+	ch := make(chan int64)
+	go func() {
+		for i := start; i <= end; i++ {
+			ch <- i
+		}
+		close(ch)
+	}()
 	wg := sync.WaitGroup{}
 	wg.Add(tNum)
 	var tErr error
