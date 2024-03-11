@@ -2,7 +2,6 @@ package pois
 
 import (
 	"crypto/rand"
-	"log"
 	"math/big"
 
 	"github.com/CESSProject/cess_pois/expanders"
@@ -79,7 +78,6 @@ func (p *Prover) NewChallengeHandle(teeID []byte, chal []int64) func([]byte) (in
 	source = append(source, teeID...)
 	source = append(source, bytesChal...)
 	source = append(source, make([]byte, 32)...)
-	log.Println("prover source", source)
 
 	fileNum := p.setLen * p.clusterSize
 	number := int64(DEFAULT_CHAL_GROUP_NUM)
@@ -121,7 +119,6 @@ func NewChallengeHandle(minerID, teeID []byte, chal []int64, front, rear, proofN
 	source = append(source, teeID...)
 	source = append(source, bytesChal...)
 	source = append(source, make([]byte, 32)...)
-	log.Println("verifier source", source)
 	fileNum := int64(256)
 	groupSize := int64(16)
 	start, count, total := front/fileNum, int64(0), (rear-front+front%fileNum-1)/(fileNum*groupSize)+1

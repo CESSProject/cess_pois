@@ -27,7 +27,7 @@ func TestChellenges(t *testing.T) {
 
 	teeId := make([]byte, 32)
 	//teeId:=[]byte("test tee id")
-	spaceChals := []int64{1312374, 1324354, 1316860, 1317539, 1324534, 1315993, 1326482, 1320953}
+	spaceChals := []int64{1313468, 1324540, 1315686, 1324882, 1314250, 1315972, 1311902, 1319999}
 	prover.SetChallengeStateForTest(0, 4864)
 	proofHandle := prover.NewChallengeHandle(teeId, spaceChals)
 
