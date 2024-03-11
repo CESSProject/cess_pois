@@ -40,16 +40,10 @@ func (prover *Prover) RestoreRawIdleFiles(setId int64) error {
 	if prover.space < (fileNum+prover.setLen*prover.Expanders.K)*FileSize {
 		return SpaceFullError
 	}
-	if !prover.generate.CompareAndSwap(false, true) {
-		return errors.New("restore raw idle files error lock is occupied")
-	}
-	defer prover.generate.Store(false)
-
 	start := (setId-1)*256/prover.clusterSize + 1
 
 	if err := prover.Expanders.GenerateIdleFileSet(
 		prover.ID, start, prover.setLen, IdleFilePath); err != nil {
-		prover.space += (fileNum + prover.setLen*prover.Expanders.K) * FileSize
 		return errors.Wrap(err, "restore raw idle files error")
 	}
 
