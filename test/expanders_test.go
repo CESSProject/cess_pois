@@ -7,7 +7,6 @@ import (
 
 	"github.com/CESSProject/cess_pois/expanders"
 	"github.com/CESSProject/cess_pois/tree"
-	"github.com/panjf2000/ants/v2"
 )
 
 func TestIdleFileSetGeneration(t *testing.T) {
@@ -56,28 +55,4 @@ func TestRealationshipGeneration(t *testing.T) {
 	}
 	t.Log("calc parents time", time.Since(st))
 	t.Log("node parents:", node.Parents)
-}
-
-func TestChannel(t *testing.T) {
-	ch := make(chan int64, 256)
-	ts := time.Now()
-	for i := int64(0); i < 256; i++ {
-		ch <- i
-	}
-	t.Log("send data to channel time", time.Since(ts))
-	close(ch)
-	thread := 4
-	wg := sync.WaitGroup{}
-	wg.Add(thread)
-	ts = time.Now()
-	for i := 0; i < thread; i++ {
-		ants.Submit(func() {
-			wg.Done()
-			for v := range ch {
-				t.Log("value", v)
-			}
-		})
-	}
-	wg.Wait()
-	t.Log("get data from channel time", time.Since(ts))
 }

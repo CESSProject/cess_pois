@@ -2,9 +2,11 @@ package pois
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +17,22 @@ import (
 	"github.com/CESSProject/cess_pois/util"
 	"github.com/pkg/errors"
 )
+
+type FileList []fs.DirEntry
+
+func (fl FileList) Len() int {
+	return len(fl)
+}
+func (fl FileList) Less(i, j int) bool {
+	tmp := strings.Split(fl[i].Name(), "-")
+	idxi, _ := strconv.Atoi(tmp[len(tmp)-1])
+	tmp = strings.Split(fl[j].Name(), "-")
+	idxj, _ := strconv.Atoi(tmp[len(tmp)-1])
+	return idxi < idxj
+}
+func (fl FileList) Swap(i, j int) {
+	fl[i], fl[j] = fl[j], fl[i]
+}
 
 // RestoreIdleFiles method will restore damaged and proved idle files.
 func (prover *Prover) RestoreIdleFiles(setId int64) error {
@@ -71,7 +89,15 @@ func (prover *Prover) RestoreSubAccFiles(setId int64) error {
 			return errors.Wrap(err, "restore sub acc files error")
 		}
 	}
-	err := prover.AccManager.RestoreSubAccFile(int(setId-1), roots)
+	labels := make([][]byte, len(roots))
+	offset := int((setId - 1) * prover.setLen * prover.clusterSize)
+	for i := 0; i < int(prover.setLen*prover.clusterSize); i++ {
+		label := append([]byte{}, prover.ID...)
+		label = append(label, expanders.GetBytes(int64(offset+i+1))...)
+		labels[i] = expanders.GetHash(append(label, roots[i]...))
+	}
+
+	err := prover.AccManager.RestoreSubAccFile(int(setId-1), labels)
 	if err != nil {
 		return errors.Wrap(err, "restore sub acc files error")
 	}
@@ -152,15 +178,15 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 		IdleFilePath,
 		fmt.Sprintf("%s-%d", expanders.SET_DIR_NAME, setId),
 	)
-
 	auxFSize := expanders.DEFAULT_AUX_SIZE * tree.DEFAULT_HASH_SIZE
 	entries, err := os.ReadDir(filesDir)
 	if err != nil {
 		return nil, err
 	}
-	roots, count := make([][]byte, acc.DEFAULT_ELEMS_NUM), 0
-	mht := make(tree.LightMHT, expanders.DEFAULT_AUX_SIZE)
+	roots := make([][]byte, 0, acc.DEFAULT_ELEMS_NUM)
+	mht := make(tree.LightMHT, auxFSize)
 
+	sort.Sort(FileList(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -169,6 +195,8 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		sort.Sort(FileList(cluster))
 		for _, file := range cluster {
 			info, err := file.Info()
 			if err != nil {
@@ -185,17 +213,18 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 			if index < int(prover.Expanders.K) {
 				continue
 			}
-			aux, err := util.ReadFile(path.Join(filesDir, entry.Name(), info.Name()))
+			aux := make([]byte, auxFSize)
+			err = util.ReadFileToBuf(path.Join(filesDir, entry.Name(), info.Name()), aux)
 			if err != nil {
 				return nil, err
 			}
+
 			mht.CalcLightMhtWithAux(aux)
-			roots[count] = mht.GetRoot()
-			count++
+			roots = append(roots, mht.GetRoot())
 		}
 	}
-	if count != 256 {
-		return nil, nil
+	if len(roots) != int(prover.setLen*prover.clusterSize) {
+		return nil, errors.New("error root number")
 	}
 	return roots, nil
 }

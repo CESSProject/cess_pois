@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"net/http"
 	_ "net/http/pprof"
 	"testing"
 	"time"
@@ -21,16 +20,16 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
-	// key, err := ParseKey("./key")
-	// if err != nil {
-	// 	t.Fatal("parse key error", err)
-	// }
-	key := acc.RsaKeygen(2048)
-	err := SaveKey("./key", key)
+	k, n, d := int64(8), int64(1024*16), int64(64)
+	key, err := ParseKey("./key")
 	if err != nil {
-		t.Fatal("save key error", err)
+		t.Fatal("parse key error", err)
 	}
+	// key := acc.RsaKeygen(2048)
+	// err := SaveKey("./key", key)
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
@@ -49,11 +48,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("generate idle file set error", err)
 	}
 	t.Log("generate idle file set time", time.Since(ts))
-
-	err = http.ListenAndServe("localhost:6060", nil)
-	if err != nil {
-		t.Log("run pprof server error", err)
-	}
+	//return
 
 	// get commits
 	ts = time.Now()
@@ -130,7 +125,7 @@ func TestPois(t *testing.T) {
 	t.Log("update prover status time", time.Since(ts))
 
 	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
-
+	return
 	//deletion proof
 	ts = time.Now()
 	delProof, err := prover.ProveDeletion(8)
