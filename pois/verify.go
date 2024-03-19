@@ -163,8 +163,8 @@ func (v *Verifier) VerifyCommitProofs(pNode ProverNode, chals [][]int64, proofs 
 
 	frontSize := int(unsafe.Sizeof(expanders.NodeType(0))) + len(pNode.ID) + 8 + 8
 	hashSize := expanders.HashSize
-	label := make([]byte, frontSize+int(v.Expanders.D+1)*hashSize+int(v.Expanders.K/2)*hashSize)
-	zero := make([]byte, int(v.Expanders.D+1)*hashSize+int(v.Expanders.K/2)*hashSize)
+	label := make([]byte, frontSize+2*hashSize)
+	zero := make([]byte, 2*hashSize)
 
 	var (
 		idx  expanders.NodeType
@@ -212,7 +212,6 @@ func (v *Verifier) VerifyCommitProofs(pNode ProverNode, chals [][]int64, proofs 
 				expanders.GetBytes(idx), zero)
 
 			if layer > 0 {
-				size := frontSize
 				logicalLayer := layer
 				if logicalLayer > v.Expanders.K {
 					logicalLayer = v.Expanders.K
@@ -233,8 +232,7 @@ func (v *Verifier) VerifyCommitProofs(pNode ProverNode, chals [][]int64, proofs 
 							return errors.Wrap(err, "verify commit proofs error")
 						}
 					}
-					copy(label[size:size+hashSize], p.Label)
-					size += hashSize
+					util.AddData(label[frontSize:frontSize+hashSize], p.Label)
 				}
 				// add file dependencies
 				//util.CopyData(label[size:], pNode.CommitsBuf.Roots[(layer-1)*IdleSetLen:layer*IdleSetLen]...)
@@ -248,8 +246,7 @@ func (v *Verifier) VerifyCommitProofs(pNode ProverNode, chals [][]int64, proofs 
 						err := errors.New("verify elder node path proof error")
 						return errors.Wrap(err, "verify commit proofs error")
 					}
-					copy(label[size:size+hashSize], proofs[i][j-1].Elders[l].Label)
-					size += hashSize
+					util.AddData(label[frontSize+hashSize:frontSize+2*hashSize], proofs[i][j-1].Elders[l].Label)
 				}
 			}
 
@@ -282,11 +279,6 @@ func (v *Verifier) VerifyNodeDependencies(ID []byte, chals [][]int64, proofs [][
 		pick = len(proofs)
 	}
 
-	clusters := make([]int64, len(chals))
-	for i := 0; i < len(chals); i++ {
-		clusters[i] = chals[i][0]
-	}
-
 	for i := 0; i < pick; i++ {
 		r1, err := rand.Int(rand.Reader, new(big.Int).SetInt64(int64(len(proofs))))
 		if err != nil {
@@ -300,11 +292,12 @@ func (v *Verifier) VerifyNodeDependencies(ID []byte, chals [][]int64, proofs [][
 		proof := proofs[r1.Int64()][index]
 		node := expanders.NewNode(proof.Node.Index)
 		node.Parents = make([]expanders.NodeType, 0, v.Expanders.D+1)
+		layer := int64(proof.Node.Index) / v.Expanders.N
 		//
 		if index < ClusterSize {
-			expanders.CalcParents(&v.Expanders, node, ID, append(clusters, index+1)...)
+			expanders.CalcNodeParents(&v.Expanders, node, ID, chals[r1.Int64()][0], v.Expanders.K+index)
 		} else {
-			expanders.CalcParents(&v.Expanders, node, ID, clusters...)
+			expanders.CalcNodeParents(&v.Expanders, node, ID, chals[r1.Int64()][0], layer)
 		}
 		for j := 0; j < len(node.Parents); j++ {
 			if node.Parents[j] != proof.Parents[j].Index {

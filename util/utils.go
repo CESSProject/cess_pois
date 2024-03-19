@@ -157,6 +157,23 @@ func CopyData(target []byte, src ...[]byte) {
 	}
 }
 
+func AddData(target []byte, src ...[]byte) {
+	for j := 0; j < len(src); j++ {
+		if len(src[j]) < len(target) {
+			continue
+		}
+		for i := 0; i < len(target); i++ {
+			target[i] ^= src[j][i]
+		}
+	}
+}
+
+func ClearData(target []byte) {
+	for i := 0; i < len(target); i++ {
+		target[i] = 0
+	}
+}
+
 func CopyFiles(src, des string) error {
 
 	if _, err := os.Stat(des); err == nil {

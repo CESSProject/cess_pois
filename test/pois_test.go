@@ -20,16 +20,16 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*16), int64(64)
-	key, err := ParseKey("./key")
-	if err != nil {
-		t.Fatal("parse key error", err)
-	}
-	// key := acc.RsaKeygen(2048)
-	// err := SaveKey("./key", key)
+	k, n, d := int64(8), int64(1024*1024), int64(80)
+	// key, err := ParseKey("./key")
 	// if err != nil {
-	// 	t.Fatal("save key error", err)
+	// 	t.Fatal("parse key error", err)
 	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
+	if err != nil {
+		t.Fatal("save key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
@@ -60,7 +60,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256)
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -71,12 +71,10 @@ func TestPois(t *testing.T) {
 	t.Log("verifier receive commits time", time.Since(ts))
 	nodes.UpdateNode(pNode)
 	//generate commits challenges
-	ts = time.Now()
 	chals, err := verifier.CommitChallenges(pNode)
 	if err != nil {
 		t.Fatal("generate commit challenges error", err)
 	}
-	t.Log("generate commit challenges time", time.Since(ts))
 
 	//prove commit and acc
 	ts = time.Now()
@@ -125,7 +123,6 @@ func TestPois(t *testing.T) {
 	t.Log("update prover status time", time.Since(ts))
 
 	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
-	return
 	//deletion proof
 	ts = time.Now()
 	delProof, err := prover.ProveDeletion(8)
@@ -347,7 +344,6 @@ func TestConcurrently(t *testing.T) {
 	}
 	verifier := pois.NewVerifier(k, n, d)
 	nodes := pois.CreateNewNodes()
-	log.Println("prove acc", prover.AccManager.GetSnapshot().Accs.Value)
 	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 	start, ok, wt := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
 

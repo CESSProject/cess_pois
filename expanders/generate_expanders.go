@@ -1,67 +1,48 @@
 package expanders
 
 import (
-	"github.com/CESSProject/cess_pois/util"
+	"crypto/sha512"
 )
 
 func ConstructStackedExpanders(k, n, d int64) *Expanders {
 	return NewExpanders(k, n, d)
 }
 
-func CalcParents(expanders *Expanders, node *Node, MinerID []byte, Count ...int64) {
-
+func CalcNodeParents(expanders *Expanders, node *Node, MinerID []byte, Count, rlayer int64) {
 	if node == nil || expanders == nil ||
 		cap(node.Parents) != int(expanders.D+1) {
 		return
 	}
 	layer := int64(node.Index) / expanders.N
-	baseParent := NodeType((layer - 1) * expanders.N)
-
 	if layer == 0 {
 		return
 	}
+	groupSize := expanders.N / expanders.D
+	offset := groupSize / 256
 
-	lens := len(MinerID) + 8 + len(Count)*8 + 8*16
-	content := make([]byte, lens)
-	util.CopyData(content, MinerID, GetBytes(Count), GetBytes(layer))
-	node.AddParent(node.Index - NodeType(expanders.N))
+	hash := sha512.New()
+	hash.Write(MinerID)
+	hash.Write(GetBytes(Count))
+	hash.Write(GetBytes(rlayer)) //add real layer
+	hash.Write(GetBytes(int64(node.Index)))
+	res := hash.Sum(nil)
+	if expanders.D > 64 {
+		hash.Reset()
+		hash.Write(res)
+		res = append(res, hash.Sum(nil)...)
+	}
+	res = res[:expanders.D]
 
-	plate := make([][]byte, 16)
-	for i := int64(0); i < expanders.D; i += 16 { //D must be a multiple of 16
-		//add index to conent
-		for j := int64(0); j < 16; j++ {
-			plate[j] = GetBytes(i + j)
-		}
-		util.CopyData(content[lens-8*16:], plate...)
-		hash := GetHash(content) //calc the hash once,gen 16 parent nodes
-		s, p := 0, NodeType(0)
-		for j := 0; j < 16; {
-			if s < 4 && j < 15 {
-				p = BytesToNodeValue(hash[j*4+s:(j+1)*4+s], expanders.N)
-				p = p%NodeType(expanders.N) + baseParent
-			} else {
-				s = 0
-				for {
-					p = (p+1)%NodeType(expanders.N) + baseParent
-					if p <= node.Index-NodeType(expanders.N) {
-						_, ok := node.ParentInList(p + NodeType(expanders.N))
-						if !ok && p != node.Index-NodeType(expanders.N) {
-							break
-						}
-					} else if _, ok := node.ParentInList(p); !ok {
-						break
-					}
-				}
-			}
-			if p < node.Index-NodeType(expanders.N) {
-				p += NodeType(expanders.N)
-			}
-			if node.AddParent(p) {
-				j++
-				s = 0
-				continue
-			}
-			s++
+	parent := node.Index - NodeType(expanders.N)
+	node.AddParent(parent)
+	for i := int64(0); i < int64(len(res)); i++ {
+		index := NodeType((layer-1)*expanders.N + i*groupSize + int64(res[i])*offset + int64(res[i])%offset)
+		if index == parent {
+			node.AddParent(index + 1)
+		} else if index < parent {
+			node.AddParent(index + NodeType(expanders.N))
+		} else {
+			node.AddParent(index)
 		}
 	}
 }

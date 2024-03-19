@@ -42,17 +42,3 @@ func TestIdleFilesSetGenerationParallely(t *testing.T) {
 	wg.Wait()
 	t.Log("generate idle file set time", time.Since(ts))
 }
-
-func TestRealationshipGeneration(t *testing.T) {
-	graph := expanders.ConstructStackedExpanders(7, 1024*1024*4, 64)
-	node := expanders.NewNode(0)
-	node.Parents = make([]expanders.NodeType, 0, graph.D+1)
-	st := time.Now()
-	for i := 0; i < 1024*1024*8; i++ {
-		node.Index = expanders.NodeType(i)
-		node.Parents = node.Parents[:0]
-		expanders.CalcParents(graph, node, []byte("test miner id"), 1)
-	}
-	t.Log("calc parents time", time.Since(st))
-	t.Log("node parents:", node.Parents)
-}

@@ -641,11 +641,6 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 	)
 	lens := len(challenges)
 	proofSet := make([][]CommitProof, lens)
-	clusters := make([]int64, lens)
-
-	for i := 0; i < lens; i++ {
-		clusters[i] = challenges[i][0]
-	}
 
 	for i := 0; i < lens; i++ {
 		proofs := make([]CommitProof, len(challenges[i])-1)
@@ -678,7 +673,7 @@ func (p *Prover) proveCommits(challenges [][]int64) ([][]CommitProof, error) {
 					fmt.Sprintf("%s-%d", expanders.FILE_NAME, layer-(p.setLen-int64(i))/p.setLen),
 				)
 			}
-			proofs[j-1], err = p.generateCommitProof(fdir, neighbor, clusters, index, layer)
+			proofs[j-1], err = p.generateCommitProof(fdir, neighbor, challenges[i][0], index, layer)
 			if err != nil {
 				return nil, errors.Wrap(err, "prove commits error")
 			}
@@ -720,7 +715,7 @@ func (p *Prover) getPathProofWithAux(aux []byte, data *[]byte, index, nodeIdx in
 	}, nil
 }
 
-func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, subfile int64) (CommitProof, error) {
+func (p *Prover) generateCommitProof(fdir, neighbor string, count, c, subfile int64) (CommitProof, error) {
 
 	if subfile < 0 || subfile > p.clusterSize+p.Expanders.K-1 {
 		return CommitProof{}, errors.New("generate commit proof error: bad node index")
@@ -775,9 +770,8 @@ func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, s
 	}
 
 	//file remapping
+	layer := subfile
 	if subfile >= p.Expanders.K {
-
-		counts = append(counts, subfile-p.Expanders.K+1)
 		baseLayer := int((subfile - p.Expanders.K/2) / p.Expanders.K)
 		subfile = p.Expanders.K
 
@@ -800,7 +794,7 @@ func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, s
 
 	node := expanders.NewNode(expanders.NodeType(c))
 	node.Parents = make([]expanders.NodeType, 0, p.Expanders.D+1)
-	expanders.CalcParents(p.Expanders, node, p.ID, counts...)
+	expanders.CalcNodeParents(p.Expanders, node, p.ID, count, layer)
 
 	fpath = path.Join(fdir, fmt.Sprintf("%s-%d", expanders.FILE_NAME, subfile-1))
 
@@ -812,42 +806,32 @@ func (p *Prover) generateCommitProof(fdir, neighbor string, counts []int64, c, s
 	parentTree.CalcLightMhtWithBytes(*pdata, expanders.HashSize)
 	lens := len(node.Parents)
 	parentProofs := make([]*MhtProof, lens)
-	wg := sync.WaitGroup{}
-	wg.Add(lens)
+
 	for i := 0; i < lens; i++ {
-		idx := i
-		ants.Submit(func() {
-			defer wg.Done()
-			index := int64(node.Parents[idx]) % p.Expanders.N
-			label := make([]byte, expanders.HashSize)
-			var (
-				pathProof tree.PathProof
-				e         error
-			)
-			if int64(node.Parents[idx]) >= subfile*p.Expanders.N {
-				copy(label, (*data)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
-				pathProof, e = nodeTree.GetPathProof(*data, int(index), expanders.HashSize)
-			} else {
-				copy(label, (*pdata)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
-				pathProof, e = parentTree.GetPathProof(*pdata, int(index), expanders.HashSize)
-			}
-			if e != nil {
-				err = e
-				return
-			}
-			if node.Parents[idx]%6 != 0 {
-				pathProof.Path = nil
-				pathProof.Locs = nil
-			}
-			parentProofs[idx] = &MhtProof{
-				Index: node.Parents[idx],
-				Label: label,
-				Paths: pathProof.Path,
-				Locs:  pathProof.Locs,
-			}
-		})
+		index := int64(node.Parents[i]) % p.Expanders.N
+		var pathProof tree.PathProof
+		label := make([]byte, expanders.HashSize)
+		if int64(node.Parents[i]) >= subfile*p.Expanders.N {
+			copy(label, (*data)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
+			pathProof, err = nodeTree.GetPathProof(*data, int(index), expanders.HashSize)
+		} else {
+			copy(label, (*pdata)[index*int64(expanders.HashSize):(index+1)*int64(expanders.HashSize)])
+			pathProof, err = parentTree.GetPathProof(*pdata, int(index), expanders.HashSize)
+		}
+		if err != nil {
+			return proof, err
+		}
+		if node.Parents[i]%6 != 0 {
+			pathProof.Path = nil
+			pathProof.Locs = nil
+		}
+		parentProofs[i] = &MhtProof{
+			Index: node.Parents[i],
+			Label: label,
+			Paths: pathProof.Path,
+			Locs:  pathProof.Locs,
+		}
 	}
-	wg.Wait()
 	if err != nil {
 		return proof, err
 	}

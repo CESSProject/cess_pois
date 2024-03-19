@@ -12,6 +12,10 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	MAX_DEGREE = 128
+)
+
 type NodeType int32
 
 type Expanders struct {
@@ -47,6 +51,9 @@ func ReadAndUnmarshalExpanders(path string) (*Expanders, error) {
 }
 
 func NewExpanders(k, n, d int64) *Expanders {
+	if d > MAX_DEGREE {
+		d = MAX_DEGREE
+	}
 	expanders := &Expanders{
 		Size: (k + 1) * n,
 		K:    k, N: n, D: d,
@@ -60,11 +67,10 @@ func NewExpanders(k, n, d int64) *Expanders {
 	}
 	expanders.NodesPool = &sync.Pool{
 		New: func() any {
-			buf := make([]Node, n)
-			for i := int64(0); i < n; i++ {
-				buf[i].Parents = make([]NodeType, 0, d+1)
+			node := &Node{
+				Parents: make([]NodeType, 0, d+1),
 			}
-			return &buf
+			return node
 		},
 	}
 	return expanders
