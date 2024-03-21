@@ -18,6 +18,7 @@ import (
 )
 
 func TestPois(t *testing.T) {
+
 	//Initialize the execution environment
 	k, n, d := int64(8), int64(1024*1024), int64(80)
 	// key, err := ParseKey("./key")
@@ -32,7 +33,6 @@ func TestPois(t *testing.T) {
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
-
 	}
 	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
@@ -64,19 +64,17 @@ func TestPois(t *testing.T) {
 
 	//verifier receive commits
 	ts = time.Now()
-	if !verifier.ReceiveCommits(prover.ID, commits) {
+	pNode := nodes.GetNode(prover.ID)
+	if !verifier.ReceiveCommits(&pNode, commits) {
 		t.Fatal("receive commits error")
 	}
 	t.Log("verifier receive commits time", time.Since(ts))
-
+	nodes.UpdateNode(pNode)
 	//generate commits challenges
-	ts = time.Now()
-	chals, err := verifier.CommitChallenges(prover.ID)
-	//t.Log("commit chals ", chals)
+	chals, err := verifier.CommitChallenges(pNode)
 	if err != nil {
 		t.Fatal("generate commit challenges error", err)
 	}
-	t.Log("generate commit challenges time", time.Since(ts))
 
 	//prove commit and acc
 	ts = time.Now()
@@ -89,9 +87,18 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("prove commit time", time.Since(ts))
 
+	jdata1, err := json.Marshal(commitProofs)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	jdata2, err := json.Marshal(accProof)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	t.Log("commit and acc proof data length", len(jdata1), len(jdata2))
 	//verify commit proof
 	ts = time.Now()
-	err = verifier.VerifyCommitProofs(prover.ID, chals, commitProofs)
+	err = verifier.VerifyCommitProofs(nodes.GetNode(prover.ID), chals, commitProofs)
 	if err != nil {
 		t.Fatal("verify commit proof error", err)
 	}
@@ -99,21 +106,21 @@ func TestPois(t *testing.T) {
 
 	//verify acc proof
 	ts = time.Now()
-	err = verifier.VerifyAcc(prover.ID, chals, accProof)
+	pNode = nodes.GetNode(prover.ID)
+	err = verifier.VerifyAcc(&pNode, chals, accProof)
 	if err != nil {
 		t.Fatal("verify acc proof error", err)
 	}
 	t.Log("verify acc proof time", time.Since(ts))
 
+	nodes.UpdateNode(pNode)
 	//add file to count
 	ts = time.Now()
-	err = prover.UpdateStatus(int64(len(chals))*8, false)
+	err = prover.UpdateStatus(256, false)
 	if err != nil {
 		t.Fatal("update status error", err)
 	}
 	t.Log("update prover status time", time.Since(ts))
-
-	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
 
 	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
 	//deletion proof
