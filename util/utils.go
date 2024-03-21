@@ -121,6 +121,9 @@ func ReadFile(path string) ([]byte, error) {
 	for {
 		n, err := out.Read(buf)
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			return nil, err
 		}
 		if _, err = buffer.Write(buf[:n]); err != nil {
@@ -151,6 +154,23 @@ func CopyData(target []byte, src ...[]byte) {
 		}
 		count += l
 		copy(target[count-l:count], d)
+	}
+}
+
+func AddData(target []byte, src ...[]byte) {
+	for j := 0; j < len(src); j++ {
+		if len(src[j]) < len(target) {
+			continue
+		}
+		for i := 0; i < len(target); i++ {
+			target[i] ^= src[j][i]
+		}
+	}
+}
+
+func ClearData(target []byte) {
+	for i := 0; i < len(target); i++ {
+		target[i] = 0
 	}
 }
 

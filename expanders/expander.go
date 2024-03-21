@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math/big"
 	"sync"
 
 	"github.com/CESSProject/cess_pois/util"
 
 	"github.com/pkg/errors"
+)
+
+const (
+	MAX_DEGREE = 128
 )
 
 type NodeType int32
@@ -46,6 +51,9 @@ func ReadAndUnmarshalExpanders(path string) (*Expanders, error) {
 }
 
 func NewExpanders(k, n, d int64) *Expanders {
+	if d > MAX_DEGREE {
+		d = MAX_DEGREE
+	}
 	expanders := &Expanders{
 		Size: (k + 1) * n,
 		K:    k, N: n, D: d,
@@ -59,11 +67,10 @@ func NewExpanders(k, n, d int64) *Expanders {
 	}
 	expanders.NodesPool = &sync.Pool{
 		New: func() any {
-			buf := make([]Node, n)
-			for i := int64(0); i < n; i++ {
-				buf[i].Parents = make([]NodeType, 0, d+1)
+			node := &Node{
+				Parents: make([]NodeType, 0, d+1),
 			}
-			return &buf
+			return node
 		},
 	}
 	return expanders
@@ -137,4 +144,15 @@ func BytesToNodeValue(data []byte, Max int64) NodeType {
 	}
 	v %= Max
 	return NodeType(v)
+}
+
+func BytesToInt64(data []byte, max int64) int64 {
+	value := big.NewInt(0).SetBytes(data)
+	bigMax := big.NewInt(max)
+	value = value.Mod(value, bigMax)
+	iValue := value.Int64()
+	if iValue < 0 {
+		iValue = -iValue
+	}
+	return iValue % max
 }

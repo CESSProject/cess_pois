@@ -9,16 +9,19 @@ import (
 
 func TestRestoreRowIdleFile(t *testing.T) {
 	k, n, d := int64(8), int64(1024*16), int64(64)
-	key := acc.RsaKeygen(2048)
+	key, err := ParseKey("./key")
+	if err != nil {
+		t.Fatal("parse key error", err)
+	}
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Init(key, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
-	err = prover.RestoreRawIdleFiles(3)
+	err = prover.RestoreRawIdleFiles(1)
 	if err != nil {
 		t.Fatal("restore raw idle files error", err)
 	}
@@ -43,17 +46,34 @@ func TestRestoreIdleFile(t *testing.T) {
 
 func TestRestoreSubAccFile(t *testing.T) {
 	k, n, d := int64(8), int64(1024*16), int64(64)
+	key, err := ParseKey("./key")
+	if err != nil {
+		t.Fatal("parse key error", err)
+	}
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
+	if err != nil {
+		t.Fatal("new prover error", err)
+	}
+	err = prover.Recovery(key, 0, 256, pois.Config{})
+	if err != nil {
+		t.Log("init prover error", err)
+	}
+	err = prover.CheckAndRestoreSubAccFiles(0, 256)
+	if err != nil {
+		t.Fatal("restore sub acc file error", err)
+	}
+}
+
+func TestRestoreAllFiles(t *testing.T) {
+	k, n, d := int64(8), int64(1024*16), int64(64)
 	key := acc.RsaKeygen(2048)
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Init(key, pois.Config{})
+	err = prover.Recovery(key, 276, 768, pois.Config{})
 	if err != nil {
-		t.Fatal("init prover error", err)
-	}
-	err = prover.RestoreSubAccFiles(6)
-	if err != nil {
-		t.Fatal("restore sub acc file error", err)
+		err = prover.CheckAndRestoreSubAccFiles(276, 768)
+		t.Log(err)
 	}
 }

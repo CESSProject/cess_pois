@@ -2,10 +2,14 @@ package pois
 
 import (
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/CESSProject/cess_pois/acc"
 	"github.com/CESSProject/cess_pois/expanders"
@@ -13,6 +17,22 @@ import (
 	"github.com/CESSProject/cess_pois/util"
 	"github.com/pkg/errors"
 )
+
+type FileList []fs.DirEntry
+
+func (fl FileList) Len() int {
+	return len(fl)
+}
+func (fl FileList) Less(i, j int) bool {
+	tmp := strings.Split(fl[i].Name(), "-")
+	idxi, _ := strconv.Atoi(tmp[len(tmp)-1])
+	tmp = strings.Split(fl[j].Name(), "-")
+	idxj, _ := strconv.Atoi(tmp[len(tmp)-1])
+	return idxi < idxj
+}
+func (fl FileList) Swap(i, j int) {
+	fl[i], fl[j] = fl[j], fl[i]
+}
 
 // RestoreIdleFiles method will restore damaged and proved idle files.
 func (prover *Prover) RestoreIdleFiles(setId int64) error {
@@ -38,16 +58,10 @@ func (prover *Prover) RestoreRawIdleFiles(setId int64) error {
 	if prover.space < (fileNum+prover.setLen*prover.Expanders.K)*FileSize {
 		return SpaceFullError
 	}
-	if !prover.generate.CompareAndSwap(false, true) {
-		return errors.New("restore raw idle files error lock is occupied")
-	}
-	defer prover.generate.Store(false)
-
 	start := (setId-1)*256/prover.clusterSize + 1
 
 	if err := prover.Expanders.GenerateIdleFileSet(
 		prover.ID, start, prover.setLen, IdleFilePath); err != nil {
-		prover.space += (fileNum + prover.setLen*prover.Expanders.K) * FileSize
 		return errors.Wrap(err, "restore raw idle files error")
 	}
 
@@ -64,19 +78,96 @@ func (prover *Prover) RestoreSubAccFiles(setId int64) error {
 		err := errors.New("bad set id")
 		return errors.Wrap(err, "restore sub acc files error")
 	}
-	roots, err := prover.CheckFilesAndGetTreeRoots(setId)
-	if err != nil {
-		return errors.Wrap(err, "restore sub acc files error")
-	}
-	if len(roots) == 0 {
+	roots, _ := prover.CheckFilesAndGetTreeRoots(setId)
+	if len(roots) != acc.DEFAULT_ELEMS_NUM {
 		err := prover.RestoreRawIdleFiles(setId)
 		if err != nil {
 			return errors.Wrap(err, "restore sub acc files error")
 		}
+		roots, err = prover.CheckFilesAndGetTreeRoots(setId)
+		if err != nil {
+			return errors.Wrap(err, "restore sub acc files error")
+		}
 	}
-	err = prover.AccManager.RestoreSubAccFile(int(setId-1), roots)
+	labels := make([][]byte, len(roots))
+	offset := int((setId - 1) * prover.setLen * prover.clusterSize)
+	for i := 0; i < int(prover.setLen*prover.clusterSize); i++ {
+		label := append([]byte{}, prover.ID...)
+		label = append(label, expanders.GetBytes(int64(offset+i+1))...)
+		labels[i] = expanders.GetHash(append(label, roots[i]...))
+	}
+
+	err := prover.AccManager.RestoreSubAccFile(int(setId-1), labels)
 	if err != nil {
 		return errors.Wrap(err, "restore sub acc files error")
+	}
+	return nil
+}
+
+func (prover *Prover) CheckAndRestoreSubAccFiles(front, rear int64) error {
+
+	if front < 0 || front > rear {
+		err := errors.New("bad front and rear value")
+		return errors.Wrap(err, "check and restore sub acc files error")
+	}
+	start := front/acc.DEFAULT_ELEMS_NUM + 1
+	end := rear / acc.DEFAULT_ELEMS_NUM
+	for i := start; i <= end; i++ {
+		fpath := path.Join(prover.AccManager.GetFilePath(), fmt.Sprintf("%s-%d", acc.DEFAULT_NAME, i-1))
+		if _, err := os.Stat(fpath); err == nil {
+			continue
+		}
+		err := prover.RestoreSubAccFiles(i)
+		if err != nil {
+			return errors.Wrap(err, "check and restore sub acc files error")
+		}
+	}
+	return nil
+}
+
+// CheckAndRestoredIdleData is used to recover idle data in parallel
+func (prover *Prover) CheckAndRestoreIdleData(front, rear int64, tNum int) error {
+
+	if front < 0 || front > rear {
+		err := errors.New("bad front and rear value")
+		return errors.Wrap(err, "check and restore sub acc files error")
+	}
+	start := front/acc.DEFAULT_ELEMS_NUM + 1
+	end := rear / acc.DEFAULT_ELEMS_NUM
+	ch := make(chan int64)
+	go func() {
+		for i := start; i <= end; i++ {
+			ch <- i
+		}
+		close(ch)
+	}()
+	wg := sync.WaitGroup{}
+	wg.Add(tNum)
+	var tErr error
+	for j := 0; j < tNum; j++ {
+		go func() {
+			defer wg.Done()
+			for {
+				i, ok := <-ch
+				if !ok {
+					break
+				}
+				fpath := path.Join(prover.AccManager.GetFilePath(), fmt.Sprintf("%s-%d", acc.DEFAULT_NAME, i-1))
+				if _, err := os.Stat(fpath); err == nil {
+					continue
+				}
+				err := prover.RestoreSubAccFiles(i)
+				if err != nil {
+					tErr = errors.Wrap(err, "check and restore sub acc files error")
+					log.Println(tErr)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if tErr != nil {
+		return tErr
 	}
 	return nil
 }
@@ -92,9 +183,10 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	roots, count := make([][]byte, acc.DEFAULT_ELEMS_NUM), 0
-	mht := make(tree.LightMHT, expanders.DEFAULT_AUX_SIZE)
+	roots := make([][]byte, 0, acc.DEFAULT_ELEMS_NUM)
+	mht := make(tree.LightMHT, auxFSize)
 
+	sort.Sort(FileList(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -103,6 +195,8 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		sort.Sort(FileList(cluster))
 		for _, file := range cluster {
 			info, err := file.Info()
 			if err != nil {
@@ -119,17 +213,18 @@ func (prover *Prover) CheckFilesAndGetTreeRoots(setId int64) ([][]byte, error) {
 			if index < int(prover.Expanders.K) {
 				continue
 			}
-			aux, err := util.ReadFile(path.Join(filesDir, entry.Name(), info.Name()))
+			aux := make([]byte, auxFSize)
+			err = util.ReadFileToBuf(path.Join(filesDir, entry.Name(), info.Name()), aux)
 			if err != nil {
 				return nil, err
 			}
+
 			mht.CalcLightMhtWithAux(aux)
-			roots[count] = mht.GetRoot()
-			count++
+			roots = append(roots, mht.GetRoot())
 		}
 	}
-	if count != 256 {
-		return nil, nil
+	if len(roots) != int(prover.setLen*prover.clusterSize) {
+		return nil, errors.New("error root number")
 	}
 	return roots, nil
 }

@@ -23,6 +23,7 @@ const (
 	SET_DIR_NAME            = "idle-files"
 	AUX_FILE                = "aux-file"
 	DEFAULT_AUX_SIZE        = 64
+	DEFAULT_NODES_CACHE     = 1024
 )
 
 var (
@@ -74,31 +75,31 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	fileNum := expanders.K
 	//create aux slices
 	roots := make([][]byte, (expanders.K+fileNum)*size+1)
-	elder := make([]*[]byte, expanders.K/2)
+	elders := expanders.FilePool.Get().(*[]byte)
+	parents := expanders.FilePool.Get().(*[]byte)
+	labels := expanders.FilePool.Get().(*[]byte)
+	mht := tree.GetLightMhtFromPool()
+	aux := make([]byte, DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE)
 
 	//calc node labels
 	hash := NewHash()
 	frontSize := len(minerID) + int(unsafe.Sizeof(NodeType(0))) + 8 + 8
-	label := make([]byte, frontSize+int(expanders.K/2)*HashSize+int(expanders.D+1)*HashSize)
-	zero := make([]byte, int(expanders.K/2)*HashSize+int(expanders.D+1)*HashSize)
+	label := make([]byte, frontSize+2*HashSize)
 	util.CopyData(label, minerID)
+	var node *Node
 
 	for i := int64(0); i < expanders.K+fileNum; i++ {
-		parents := expanders.FilePool.Get().(*[]byte)
-		labels := expanders.FilePool.Get().(*[]byte)
 		logicalLayer := i
-		//calc nodes relationship
-		readBuf := expanders.NodesPool.Get().(*[]Node)
-		calcNodesParents(expanders, i, size, readBuf, minerID, clusters...)
-
 		for j := int64(0); j < size; j++ {
 			util.CopyData(label[len(minerID):], GetBytes(clusters[j]), GetBytes(int64(0)))
+			//calc nodes relationship
+			ch := calcNodesParents(expanders, i, minerID, clusters[j])
 			//read parents' label of file j, and fill elder node labels to add files relationship
 			if i >= expanders.K {
 				logicalLayer = expanders.K
 				//When the last level is reached, join the file index
 				util.CopyData(label[len(minerID)+8:], GetBytes((clusters[j]-1)*fileNum+i-expanders.K+1))
-				readEldersData(expanders, setDir, i, j, elder, clusters)
+				readEldersData(expanders, setDir, i, j, elders, clusters)
 			}
 			if i > 0 {
 				if err := util.ReadFileToBuf(path.Join(setDir,
@@ -108,28 +109,26 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 				}
 			}
 			for k := int64(0); k < expanders.N; k++ {
-				node := &(*readBuf)[k]
-				util.CopyData(label[len(minerID)+8+8:], GetBytes(node.Index)) //label=[minerID||clusterID||fileID||nodeID||parent labels||file dependencies]
-				copy(label[frontSize:], zero)
-
+				util.CopyData(label[len(minerID)+8+8:], GetBytes(NodeType(logicalLayer*expanders.N+k))) //label=[minerID||clusterID||fileID||nodeID||parent labels||file dependencies]
+				util.ClearData(label[frontSize:])
+				node = <-ch
 				if i > 0 && !node.NoParents() {
-					bcount := frontSize
 					for _, p := range node.Parents {
 						idx := int64(p) % expanders.N
 						l, r := idx*int64(HashSize), (idx+1)*int64(HashSize)
 						if int64(p) < logicalLayer*expanders.N {
-							copy(label[bcount:bcount+HashSize], (*parents)[l:r])
+							util.AddData(label[frontSize:frontSize+HashSize], (*parents)[l:r])
 						} else {
-							copy(label[bcount:bcount+HashSize], (*labels)[l:r])
+							util.AddData(label[frontSize:frontSize+HashSize], (*labels)[l:r])
 						}
-						bcount += HashSize
 					}
 					// //add files relationship
-					for l := 0; i >= expanders.K && l < int(expanders.K/2); l++ {
-						copy(label[bcount:bcount+HashSize], (*elder[l])[k*int64(HashSize):(k+1)*int64(HashSize)])
-						bcount += HashSize
+					if i >= expanders.K {
+						util.AddData(label[frontSize+HashSize:frontSize+2*HashSize], (*elders)[k*int64(HashSize):(k+1)*int64(HashSize)])
 					}
 				}
+				expanders.NodesPool.Put(node)
+
 				hash.Reset()
 				hash.Write(label)
 				if i+j > 0 { //add same layer dependency relationship
@@ -138,13 +137,12 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 				copy((*labels)[k*int64(HashSize):(k+1)*int64(HashSize)], hash.Sum(nil))
 			}
 
+			close(ch)
+
 			//calc merkel tree root hash
-			mht := tree.GetLightMhtFromPool()
 			mht.CalcLightMhtWithBytes((*labels), HashSize)
 			roots[i*size+j] = mht.GetRoot()
-			aux := make([]byte, DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE)
 			copy(aux, (*mht)[DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE:2*DEFAULT_AUX_SIZE*tree.DEFAULT_HASH_SIZE])
-			tree.PutLightMhtToPool(mht)
 
 			//save aux data
 			if err := util.SaveFile(path.Join(
@@ -160,15 +158,12 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 				return errors.Wrap(err, "generate idle file error")
 			}
 		}
-		expanders.FilePool.Put(parents)
-		expanders.FilePool.Put(labels)
-		expanders.NodesPool.Put(readBuf)
 	}
-
 	//return memory space
-	for i := 0; i < int(expanders.K/2); i++ {
-		expanders.FilePool.Put(elder[i])
-	}
+	expanders.FilePool.Put(parents)
+	expanders.FilePool.Put(labels)
+	expanders.NodesPool.Put(elders)
+	tree.PutLightMhtToPool(mht)
 	//calculate new dir name
 	hash = sha256.New()
 	for i := 0; i < len(roots)-1; i++ {
@@ -179,34 +174,39 @@ func (expanders *Expanders) GenerateIdleFileSet(minerID []byte, start, size int6
 	if err := util.SaveProofFile(path.Join(setDir, COMMIT_FILE), roots); err != nil {
 		return errors.Wrap(err, "generate idle file error")
 	}
-
 	return nil
 }
 
-func calcNodesParents(expanders *Expanders, layer, size int64, nodes *[]Node, minerID []byte, Count ...int64) {
+func calcNodesParents(expanders *Expanders, layer int64, minerID []byte, count int64) chan *Node {
 	logicalLayer := layer
 	if logicalLayer >= expanders.K {
 		logicalLayer = expanders.K
-		Count = append(Count[:size], layer-logicalLayer+1)
 	}
-	for j := int64(0); j < expanders.N; j++ {
-		(*nodes)[j].Index = NodeType(j + logicalLayer*expanders.N)
-		(*nodes)[j].Parents = (*nodes)[j].Parents[:0]
-		CalcParents(expanders, &(*nodes)[j], minerID, Count...)
-	}
+	ch := make(chan *Node, DEFAULT_NODES_CACHE)
+	go func() {
+		for j := int64(0); j < expanders.N; j++ {
+			node := expanders.NodesPool.Get().(*Node)
+			node.Index = NodeType(j + logicalLayer*expanders.N)
+			node.Parents = node.Parents[:0]
+			CalcNodeParents(expanders, node, minerID, count, layer)
+			ch <- node
+		}
+	}()
+	return ch
 }
 
-func readEldersData(expanders *Expanders, setDir string, layer, cidx int64, elder []*[]byte, clusters []int64) error {
+func readEldersData(expanders *Expanders, setDir string, layer, cidx int64, elders *[]byte, clusters []int64) error {
 	baseLayer := int((layer - expanders.K/2) / expanders.K)
+	util.ClearData(*elders)
+	temp := expanders.FilePool.Get().(*[]byte)
+	defer expanders.FilePool.Put(temp)
 	for l := 0; l < int(expanders.K/2); l++ {
-		if elder[l] == nil {
-			elder[l] = expanders.FilePool.Get().(*[]byte)
-		}
 		if err := util.ReadFileToBuf(path.Join(setDir,
 			fmt.Sprintf("%s-%d", CLUSTER_DIR_NAME, clusters[cidx]),
-			fmt.Sprintf("%s-%d", FILE_NAME, baseLayer+2*l)), *(elder[l])); err != nil {
+			fmt.Sprintf("%s-%d", FILE_NAME, baseLayer+2*l)), *temp); err != nil {
 			return errors.Wrap(err, "read elders' data error")
 		}
+		util.AddData(*elders, *temp)
 	}
 	return nil
 }

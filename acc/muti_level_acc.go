@@ -37,6 +37,8 @@ type AccHandle interface {
 	//RollBack will roll back acc to snapshot version,please use with caution
 	RollBack() bool
 	RestoreSubAccFile(index int, elems [][]byte) error
+	//
+	GetFilePath() string
 }
 
 var _AccManager *MutiLevelAcc
@@ -98,7 +100,7 @@ func Recovery(accPath string, key RsaKey, front, rear int64) (AccHandle, error) 
 		Deleted:  int(front),
 	}
 	if err := _AccManager.constructMutiAcc(rear); err != nil {
-		return nil, errors.Wrap(err, "recovery muti-acc error")
+		return _AccManager, errors.Wrap(err, "recovery muti-acc error")
 	}
 	return _AccManager, nil
 }
@@ -129,6 +131,10 @@ func NewMutiLevelAcc(path string, key RsaKey) (AccHandle, error) {
 
 func GetAccHandle() AccHandle {
 	return _AccManager
+}
+
+func (acc *MutiLevelAcc) GetFilePath() string {
+	return acc.FilePath
 }
 
 func (acc *MutiLevelAcc) GetSnapshot() *MutiLevelAcc {
@@ -476,7 +482,10 @@ func (acc *MutiLevelAcc) GetWitnessChains(indexs []int64) ([]*WitnessNode, error
 		if err != nil {
 			return nil, errors.Wrap(err, "get witness chains error")
 		}
-
+		// if indexs[i]%DEFAULT_ELEMS_NUM != 0 && i-1 < len(indexs) {
+		// 	chains[i].Acc.Wit = nil
+		// 	chains[i].Acc.Acc = nil
+		// }
 	}
 	return chains, nil
 }

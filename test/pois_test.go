@@ -3,6 +3,8 @@ package test
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"log"
 	"math/big"
 	_ "net/http/pprof"
@@ -10,30 +12,35 @@ import (
 	"time"
 
 	"github.com/CESSProject/cess_pois/acc"
+	"github.com/CESSProject/cess_pois/expanders"
 	"github.com/CESSProject/cess_pois/pois"
 	"github.com/CESSProject/cess_pois/util"
 )
 
 func TestPois(t *testing.T) {
-
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
-	key, err := ParseKey("./key")
+	k, n, d := int64(8), int64(1024*1024), int64(80)
+	// key, err := ParseKey("./key")
+	// if err != nil {
+	// 	t.Fatal("parse key error", err)
+	// }
+	key := acc.RsaKeygen(2048)
+	err := SaveKey("./key", key)
 	if err != nil {
-		t.Fatal("parse key error", err)
+		t.Fatal("save key error", err)
 	}
-	verifier := pois.NewVerifier(k, n, d)
-
-	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2, 32)
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 
 	}
-	err = prover.Recovery(key, 8, 256*5, pois.Config{})
+	err = prover.Recovery(key, 0, 0, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
+	verifier := pois.NewVerifier(k, n, d)
+	nodes := pois.CreateNewNodes()
 
 	ts := time.Now()
 	err = prover.GenerateIdleFileSet()
@@ -41,6 +48,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("generate idle file set error", err)
 	}
 	t.Log("generate idle file set time", time.Since(ts))
+	//return
 
 	// get commits
 	ts = time.Now()
@@ -52,7 +60,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256*5)
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -107,6 +115,7 @@ func TestPois(t *testing.T) {
 
 	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
 
+	t.Log("commit proof updated data:", prover.GetFront(), prover.GetRear())
 	//deletion proof
 	ts = time.Now()
 	delProof, err := prover.ProveDeletion(8)
@@ -116,10 +125,16 @@ func TestPois(t *testing.T) {
 	}
 	t.Log("prove deletion proof time", time.Since(ts))
 
+	jdata, err := json.Marshal(delProof)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	t.Log("deletion proof data length", len(jdata))
+
 	ts = time.Now()
 	//set space challenge state
 	//err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256)
-	err = prover.SetChallengeState(key, verifier.GetNode(prover.ID).Acc, 8, 256*5)
+	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 0, 256)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
@@ -134,44 +149,169 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 9, 256*5+1)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1, 256+1)
 	//spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)
 	}
 	t.Log("prove space time", time.Since(ts))
+
+	jdata, err = json.Marshal(spaceProof)
+	if err != nil {
+		t.Fatal("data converted to json error", err)
+	}
+	t.Log("space proof data length", len(jdata))
+
 	//verify space proof
 	ts = time.Now()
-	err = verifier.VerifySpace(verifier.GetNode(prover.ID), spaceChals, spaceProof)
+	err = verifier.VerifySpace(nodes.GetNode(prover.ID), spaceChals, spaceProof)
 	if err != nil {
 		t.Fatal("verify space proof error", err)
 	}
 	t.Log("verify space proof time", time.Since(ts))
 	prover.RestChallengeState()
 
-	//verify deletion proof
-	ts = time.Now()
-	err = verifier.VerifyDeletion(prover.ID, delProof)
-	if err != nil {
-		t.Fatal("verify deletion proof error", err)
-	}
-	t.Log("verify deletion proof time", time.Since(ts))
+	// //verify deletion proof
+	// ts = time.Now()
+	// pNode = nodes.GetNode(prover.ID)
+	// err = verifier.VerifyDeletion(&pNode, delProof)
+	// if err != nil {
+	// 	t.Fatal("verify deletion proof error", err)
+	// }
+	// t.Log("verify deletion proof time", time.Since(ts))
+	// nodes.UpdateNode(pNode)
 
-	//add file to count
-	ts = time.Now()
-	err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
-	if err != nil {
-		t.Fatal("update count error", err)
-	}
-	t.Log("update prover status time", time.Since(ts))
-	t.Log("deletion proof updated data:", prover.GetFront(), prover.GetRear())
+	// //add file to count
+	// ts = time.Now()
+	// err = prover.UpdateStatus(int64(len(delProof.Roots)), true)
+	// if err != nil {
+	// 	t.Fatal("update count error", err)
+	// }
+	// t.Log("update prover status time", time.Since(ts))
+	// ts = time.Now()
+	// err = prover.DeleteFiles()
+	// if err != nil {
+	// 	t.Fatal("delete files error", err)
+	// }
+	// t.Log("delete files time", time.Since(ts))
+}
 
-	ts = time.Now()
-	err = prover.DeleteFiles()
+func TestNewChallenge(t *testing.T) {
+	k, n, d := int64(8), int64(1024*16), int64(64)
+	key, err := ParseKey("./key")
 	if err != nil {
-		t.Fatal("delete files error", err)
+		t.Fatal("parse key error", err)
 	}
-	t.Log("delete files time", time.Since(ts))
+	// key := acc.RsaKeygen(2048)
+	// err := SaveKey("./key", key)
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
+	blockNum := 3
+	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
+	if err != nil {
+		t.Fatal("new prover error", err)
+	}
+	err = prover.Recovery(key, 0, 0, pois.Config{})
+	//err = prover.Init(key, pois.Config{})
+	if err != nil {
+		t.Fatal("recovery prover error", err)
+	}
+	verifier := pois.NewVerifier(k, n, d)
+	// nodes := pois.CreateNewNodes()
+	// nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256*int64(blockNum))
+
+	err = prover.GenerateIdleFileSets(blockNum)
+	if err != nil {
+		t.Fatal("generate idle file set error", err)
+	}
+	count := int64(0)
+	nodes := pois.CreateNewNodes()
+	for i := 0; i < blockNum; i++ {
+		commits, err := prover.GetIdleFileSetCommits()
+		if err != nil {
+			t.Fatal("get commits error", err)
+		}
+		nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, count)
+		pNode := nodes.GetNode(prover.ID)
+		if !verifier.ReceiveCommits(&pNode, commits) {
+			t.Fatal("receive commits error")
+		}
+
+		nodes.UpdateNode(pNode)
+		//generate commits challenges
+		chals, err := verifier.CommitChallenges(pNode)
+		if err != nil {
+			t.Fatal("generate commit challenges error", err)
+		}
+
+		//prove commit and acc
+		commitProofs, accProof, err := prover.ProveCommitAndAcc(chals)
+		if err != nil {
+			t.Fatal("prove commit error", err)
+		}
+		if err == nil && commitProofs == nil && accProof == nil {
+			t.Log("update or delete task is already running")
+		}
+		//verify commit proof
+		err = verifier.VerifyCommitProofs(nodes.GetNode(prover.ID), chals, commitProofs)
+		if err != nil {
+			t.Fatal("verify commit proof error", err)
+		}
+
+		//verify acc proof
+		pNode = nodes.GetNode(prover.ID)
+		err = verifier.VerifyAcc(&pNode, chals, accProof)
+		if err != nil {
+			t.Fatal("verify acc proof error", err)
+		}
+
+		nodes.UpdateNode(pNode)
+		//add file to count
+		err = prover.UpdateStatus(256, false)
+		if err != nil {
+			t.Fatal("update status error", err)
+		}
+		count += 256
+	}
+
+	err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 0, 256*int64(blockNum))
+	if err != nil {
+		t.Fatal("set challenge state error", err)
+	}
+
+	spaceChals, err := verifier.SpaceChallenges(8)
+	if err != nil {
+		t.Fatal("generate space chals error", err)
+	}
+
+	teeId := make([]byte, 32)
+	handle := prover.NewChallengeHandle(teeId, spaceChals)
+	vhandle := pois.NewChallengeHandle([]byte("test miner id"), teeId, spaceChals, 0, int64(blockNum)*256, int64(blockNum/16)+1)
+	var prior []byte
+	for {
+		left, right := handle(prior)
+		if left == right {
+			t.Log("left==right")
+			break
+		}
+		spaceProof, err := prover.ProveSpace(spaceChals, left, right+1)
+		if err != nil {
+			t.Fatal("prove space error", err)
+		}
+		err = verifier.VerifySpace(nodes.GetNode(prover.ID), spaceChals, spaceProof)
+		if err != nil {
+			t.Fatal("verify space proof error", err)
+		}
+		t.Log("check result", vhandle(prior, left, right))
+		prior = expanders.GetHash([]byte(fmt.Sprintln(left, right)))
+	}
+}
+
+func TestGenPoisKey(t *testing.T) {
+	st := time.Now()
+	acc.RsaKeygen(2048)
+	t.Log("gen pois key time ", time.Since(st))
 }
 
 func TestConcurrently(t *testing.T) {
@@ -196,8 +336,8 @@ func TestConcurrently(t *testing.T) {
 		t.Fatal("recovery prover error", err)
 	}
 	verifier := pois.NewVerifier(k, n, d)
-	log.Println("prove acc", prover.AccManager.GetSnapshot().Accs.Value)
-	verifier.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
+	nodes := pois.CreateNewNodes()
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 0, 0)
 	start, ok, wt := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
 
 	var (
@@ -227,12 +367,13 @@ func TestConcurrently(t *testing.T) {
 				log.Println("get commits error", err)
 				return
 			}
-
-			if !verifier.ReceiveCommits(prover.ID, commits) {
+			pNode := nodes.GetNode(prover.ID)
+			if !verifier.ReceiveCommits(&pNode, commits) {
 				log.Println("receive commits error")
 				return
 			}
-			chals, err = verifier.CommitChallenges(prover.ID)
+			nodes.UpdateNode(pNode)
+			chals, err = verifier.CommitChallenges(pNode)
 			if err != nil {
 				log.Println("generate commit challenges error", err)
 				return
@@ -244,7 +385,7 @@ func TestConcurrently(t *testing.T) {
 				log.Println("prove commit error", err)
 				return
 			}
-			if err == nil && commitProofs == nil && accProof == nil {
+			if commitProofs == nil && accProof == nil {
 				log.Println("update or delete task is already running")
 				return
 			}
@@ -263,16 +404,18 @@ func TestConcurrently(t *testing.T) {
 	go func() {
 		for {
 			<-ok
-			err := verifier.VerifyCommitProofs(prover.ID, chals, commitProofs)
+			pNode := nodes.GetNode(prover.ID)
+			err := verifier.VerifyCommitProofs(pNode, chals, commitProofs)
 			if err != nil {
 				log.Println("verify commit proof error", err)
 				return
 			}
-			err = verifier.VerifyAcc(prover.ID, chals, accProof)
+			err = verifier.VerifyAcc(&pNode, chals, accProof)
 			if err != nil {
 				log.Println("verify acc proof error", err)
 				return
 			}
+			nodes.UpdateNode(pNode)
 			<-start
 		}
 	}()
@@ -291,6 +434,7 @@ func ToBytes(key acc.RsaKey) []byte {
 	copy(data[:16], buf.Bytes())
 	copy(data[16:16+nl], n)
 	copy(data[16+nl:], g)
+
 	return data
 }
 
