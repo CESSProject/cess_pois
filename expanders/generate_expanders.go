@@ -20,6 +20,10 @@ func CalcNodeParents(expanders *Expanders, node *Node, MinerID []byte, Count, rl
 	groupSize := expanders.N / expanders.D
 	offset := groupSize / 256
 
+	if offset <= 0 {
+		offset = 1
+	}
+
 	hash := sha512.New()
 	hash.Write(MinerID)
 	hash.Write(GetBytes(Count))
