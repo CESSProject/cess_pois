@@ -20,7 +20,7 @@ import (
 func TestPois(t *testing.T) {
 
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(80)
+	k, n, d := int64(8), int64(1024*16), int64(64)
 	// key, err := ParseKey("./key")
 	// if err != nil {
 	// 	t.Fatal("parse key error", err)
@@ -323,7 +323,7 @@ func TestGenPoisKey(t *testing.T) {
 
 func TestConcurrently(t *testing.T) {
 	//Initialize the execution environment
-	k, n, d := int64(8), int64(1024*1024), int64(64)
+	k, n, d := int64(8), int64(1024*16), int64(64)
 	// key, err := ParseKey("./key")
 	// if err != nil {
 	// 	t.Fatal("parse key error", err)
