@@ -101,7 +101,7 @@ func (p *Prover) NewChallengeHandle(teeID []byte, chal []int64) func([]byte) (in
 		v := int64(expanders.BytesToInt64(hash, max))
 		left = (start+count*groupSize+v)*fileNum + 1
 		right = ((left-1)/fileNum+1)*fileNum + 1
-		if left < front {
+		if left <= front {
 			left = front + 1
 		}
 		count++
