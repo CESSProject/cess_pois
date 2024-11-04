@@ -80,7 +80,7 @@ func (prover *Prover) RestoreSubAccFiles(setId int64) error {
 	}
 	roots, _ := prover.CheckFilesAndGetTreeRoots(setId)
 	if len(roots) != acc.DEFAULT_ELEMS_NUM {
-		err := prover.RestoreRawIdleFiles(setId)
+		err := prover.RestoreIdleFiles(setId) //restore raw idle files and remove tempfile
 		if err != nil {
 			return errors.Wrap(err, "restore sub acc files error")
 		}

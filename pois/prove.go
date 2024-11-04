@@ -424,6 +424,9 @@ func (p *Prover) UpdateStatus(num int64, isDelete bool) error {
 	if err := p.organizeFiles(p.rear-num, num); err != nil {
 		return errors.Wrap(err, "updat prover status error")
 	}
+	for i := ((p.front + num - 1) / num) * num; i < p.rear-num; i += num {
+		p.organizeFiles(i, num)
+	}
 	return nil
 }
 

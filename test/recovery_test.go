@@ -21,7 +21,7 @@ func TestRestoreRowIdleFile(t *testing.T) {
 	if err != nil {
 		t.Fatal("init prover error", err)
 	}
-	err = prover.RestoreRawIdleFiles(1)
+	err = prover.RestoreRawIdleFiles(2)
 	if err != nil {
 		t.Fatal("restore raw idle files error", err)
 	}
