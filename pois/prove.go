@@ -1,8 +1,10 @@
 package pois
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/big"
 	"os"
 	"path"
@@ -167,6 +169,7 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 		return errors.Wrap(err, "recovery prover error")
 	}
 	//recovery context
+	log.Println("recovered acc:", hex.EncodeToString(p.AccManager.GetSnapshot().Accs.Value))
 
 	generated, err := p.calcGeneratedFile(IdleFilePath)
 	if err != nil {
@@ -224,6 +227,7 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 	}
 
 	localAcc := big.NewInt(0).SetBytes(p.chainState.Acc.GetSnapshot().Accs.Value)
+	log.Println("local acc:", hex.EncodeToString(p.chainState.Acc.GetSnapshot().Accs.Value))
 	if chainAcc.Cmp(localAcc) != 0 {
 		err = errors.New("the restored acc value is not equal to the snapshot value")
 		return errors.Wrap(err, "recovery chain state error")
