@@ -358,11 +358,12 @@ func (acc *MutiLevelAcc) addSubAccBybatch(subAcc *AccNode) {
 		return
 	}
 	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
-	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
-		acc.ElemNums += subAcc.Len - acc.CurrCount
-		lens := len(acc.Parent.Children)
-		acc.Parent.Children[lens-1] = subAcc
-	} else if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
+	// if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
+	// 	acc.ElemNums += subAcc.Len - acc.CurrCount
+	// 	lens := len(acc.Parent.Children)
+	// 	acc.Parent.Children[lens-1] = subAcc
+	// } else
+	if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
 		acc.ElemNums += subAcc.Len
 		acc.Parent.Children = append(acc.Parent.Children, subAcc)
 	} else {

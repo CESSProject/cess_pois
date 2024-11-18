@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -27,18 +28,19 @@ func TestPois(t *testing.T) {
 	}
 	// key := acc.RsaKeygen(2048)
 	// err := SaveKey("./key", key)
-	if err != nil {
-		t.Fatal("save key error", err)
-	}
+	// if err != nil {
+	// 	t.Fatal("save key error", err)
+	// }
 	prover, err := pois.NewProver(k, n, d, []byte("test miner id"), 256*64*2*4, 32)
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 16+8+8, 512+256+256, pois.Config{})
+	err = prover.Recovery(key, 8+8+8, 256+256+256, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
+	t.Log("recoveried acc:", hex.EncodeToString(prover.AccManager.GetSnapshot().Accs.Value))
 	verifier := pois.NewVerifier(k, n, d)
 	nodes := pois.CreateNewNodes()
 
@@ -60,7 +62,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 16+8+8, 512+256+256)
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 8+8+8, 256+256+256)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -141,7 +143,7 @@ func TestPois(t *testing.T) {
 	ts = time.Now()
 	//set space challenge state
 	//err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256)
-	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 16+8+8, 512+256+256+256)
+	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 8+8+8, 512+256+256)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
@@ -156,7 +158,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 9+8+8+8, 512+256+256+256+1)
+	spaceProof, err := prover.ProveSpace(spaceChals, 1+8+8+8, 1+256+256+256+256)
 	//spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)
@@ -201,6 +203,7 @@ func TestPois(t *testing.T) {
 		t.Fatal("delete files error", err)
 	}
 	t.Log("delete files time", time.Since(ts))
+	t.Log("Intermediate state acc:", hex.EncodeToString(prover.AccManager.GetSnapshot().Accs.Value))
 }
 
 func TestNewChallenge(t *testing.T) {
