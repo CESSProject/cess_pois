@@ -35,12 +35,13 @@ func TestPois(t *testing.T) {
 	if err != nil {
 		t.Fatal("new prover error", err)
 	}
-	err = prover.Recovery(key, 8+8+8, 256+256+256, pois.Config{})
+	front, rear := int64(8+8+1), int64(256+256)
+	err = prover.Recovery(key, front, rear, pois.Config{})
 	//err = prover.Init(key, pois.Config{})
 	if err != nil {
 		t.Fatal("recovery prover error", err)
 	}
-	t.Log("recoveried acc:", hex.EncodeToString(prover.AccManager.GetSnapshot().Accs.Value))
+
 	verifier := pois.NewVerifier(k, n, d)
 	nodes := pois.CreateNewNodes()
 
@@ -62,7 +63,7 @@ func TestPois(t *testing.T) {
 
 	//register prover
 
-	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, 8+8+8, 256+256+256)
+	nodes.RegisterProverNode(prover.ID, key, prover.AccManager.GetSnapshot().Accs.Value, front, rear)
 
 	//verifier receive commits
 	ts = time.Now()
@@ -143,7 +144,7 @@ func TestPois(t *testing.T) {
 	ts = time.Now()
 	//set space challenge state
 	//err = prover.SetChallengeState(key, prover.AccManager.GetSnapshot().Accs.Value, 8, 256)
-	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, 8+8+8, 512+256+256)
+	err = prover.SetChallengeState(key, nodes.GetNode(prover.ID).Acc, front, rear+256)
 	if err != nil {
 		t.Fatal("set challenge state error", err)
 	}
@@ -158,7 +159,7 @@ func TestPois(t *testing.T) {
 
 	//prove space
 	ts = time.Now()
-	spaceProof, err := prover.ProveSpace(spaceChals, 1+8+8+8, 1+256+256+256+256)
+	spaceProof, err := prover.ProveSpace(spaceChals, front+1, rear+1+256)
 	//spaceProof, err := prover.ProveSpace(spaceChals, 1, 257)
 	if err != nil {
 		t.Fatal("prove space error", err)

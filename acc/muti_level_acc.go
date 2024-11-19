@@ -3,6 +3,8 @@ package acc
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/hex"
+	"log"
 	"math"
 	"math/big"
 	"os"
@@ -358,12 +360,13 @@ func (acc *MutiLevelAcc) addSubAccBybatch(subAcc *AccNode) {
 		return
 	}
 	//The upper function has judged that acc.CurrCount+elemNums is less than or equal DEFAULT_ELEMS_NUM
-	// if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
-	// 	acc.ElemNums += subAcc.Len - acc.CurrCount
-	// 	lens := len(acc.Parent.Children)
-	// 	acc.Parent.Children[lens-1] = subAcc
-	// } else
-	if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
+
+	if acc.CurrCount > 0 && acc.CurrCount < DEFAULT_ELEMS_NUM {
+		acc.ElemNums += subAcc.Len - acc.CurrCount
+		lens := len(acc.Parent.Children)
+		acc.Parent.Children[lens-1] = subAcc
+		log.Println("second sub acc", len(acc.Parent.Children), hex.EncodeToString(acc.Parent.Children[lens-1].Value))
+	} else if len(acc.Parent.Children)+1 <= DEFAULT_ELEMS_NUM {
 		acc.ElemNums += subAcc.Len
 		acc.Parent.Children = append(acc.Parent.Children, subAcc)
 	} else {
@@ -375,8 +378,10 @@ func (acc *MutiLevelAcc) addSubAccBybatch(subAcc *AccNode) {
 		acc.Accs.Children = append(acc.Accs.Children, node)
 		acc.Parent = node
 	}
+	log.Println("curracc:", acc.Curr.Len, len(acc.Parent.Children))
 	acc.Curr = subAcc
 	acc.CurrCount = acc.Curr.Len
+	log.Println("sub acc", acc.Curr.Len, hex.EncodeToString(acc.Curr.Value))
 }
 
 func (acc *MutiLevelAcc) DeleteElements(num int) error {
@@ -641,13 +646,17 @@ func (acc *MutiLevelAcc) constructMutiAcc(rear int64) error {
 		}
 		node := &AccNode{}
 		left, right := 0, len(backup.Values)
-		if i == 0 && DEFAULT_ELEMS_NUM-offset < right {
-			left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - right) //sub real file offset
-			backup.Values = backup.Values[left:right]
-			backup.Wits = generateWitness(acc.Key.G, acc.Key.N, backup.Values)
-			err = saveAccData(acc.FilePath, index, backup.Values, backup.Wits)
-			if err != nil {
-				return err
+		if i == 0 {
+			if DEFAULT_ELEMS_NUM-offset < right {
+				left = acc.Deleted%DEFAULT_ELEMS_NUM - (DEFAULT_ELEMS_NUM - right) //sub real file offset
+				backup.Values = backup.Values[left:right]
+				backup.Wits = generateWitness(acc.Key.G, acc.Key.N, backup.Values)
+				err = saveAccData(acc.FilePath, index, backup.Values, backup.Wits)
+				if err != nil {
+					return err
+				}
+			} else if DEFAULT_ELEMS_NUM-offset > right {
+				return errors.New("the number of acc elements does not match")
 			}
 		}
 
