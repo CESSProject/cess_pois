@@ -434,7 +434,7 @@ func (acc *MutiLevelAcc) DeleteElements(num int) error {
 	}
 	acc.ElemNums -= num
 	//update sibling witness and parent acc
-	acc.updateAcc(acc.Parent)
+	acc.updateAcc(acc.Accs.Children[0])
 	//update parents and top acc
 	acc.updateAcc(acc.Accs)
 	acc.Deleted += num
