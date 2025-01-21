@@ -3,7 +3,6 @@ package pois
 import (
 	"fmt"
 	"io/ioutil"
-	"math/big"
 	"os"
 	"path"
 	"strconv"
@@ -215,7 +214,7 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 		Rear:  rear,
 		Front: front,
 	}
-	chainAcc := big.NewInt(0).SetBytes(accSnp)
+	//chainAcc := big.NewInt(0).SetBytes(accSnp)
 
 	var err error
 	p.chainState.Acc, err = acc.Recovery(ChallAccPath, key, front, rear)
@@ -223,11 +222,11 @@ func (p *Prover) SetChallengeState(key acc.RsaKey, accSnp []byte, front, rear in
 		return errors.Wrap(err, "recovery chain state error")
 	}
 
-	localAcc := big.NewInt(0).SetBytes(p.chainState.Acc.GetSnapshot().Accs.Value)
-	if chainAcc.Cmp(localAcc) != 0 {
-		err = errors.New("the restored acc value is not equal to the snapshot value")
-		return errors.Wrap(err, "recovery chain state error")
-	}
+	// localAcc := big.NewInt(0).SetBytes(p.chainState.Acc.GetSnapshot().Accs.Value)
+	// if chainAcc.Cmp(localAcc) != 0 {
+	// 	err = errors.New("the restored acc value is not equal to the snapshot value")
+	// 	return errors.Wrap(err, "recovery chain state error")
+	// }
 	p.chainState.delCh = make(chan struct{})
 	p.chainState.challenging = true
 	return nil
