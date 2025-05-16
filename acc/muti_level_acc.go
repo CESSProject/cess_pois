@@ -15,7 +15,7 @@ import (
 
 const (
 	DEFAULT_PATH        = "./acc/"
-	DEFAULT_DIR_PERM    = 0777
+	DEFAULT_DIR_PERM    = 0755
 	DEFAULT_ELEMS_NUM   = 256
 	DEFAULT_LEVEL       = 3
 	DEFAULT_NAME        = "sub-acc"

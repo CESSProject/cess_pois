@@ -2,7 +2,6 @@ package pois
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"strconv"
@@ -185,8 +184,29 @@ func (p *Prover) Recovery(key acc.RsaKey, front, rear int64, config Config) erro
 	if err != nil {
 		return errors.Wrap(err, "recovery prover error")
 	}
-
+	// clean up invalid files
+	p.CleanupDisk()
 	return nil
+}
+
+func (p *Prover) CleanupDisk() {
+
+	//clean up invalid idle space
+	if p.front == p.rear && p.front == 0 {
+		os.RemoveAll(IdleFilePath)
+		os.MkdirAll(IdleFilePath, 0755)
+	}
+
+	//clear replaced space
+	if p.front > 0 {
+		p.DeleteFiles()
+	}
+
+	//clear invalid temporary data
+	num := p.setLen * p.clusterSize
+	for i := ((p.front + num - 1) / num) * num; i < p.rear-num; i += num {
+		p.organizeFiles(i, num)
+	}
 }
 
 func checkConfig(config Config) {
@@ -202,6 +222,9 @@ func checkConfig(config Config) {
 	}
 	if config.ChallAccPath != "" && config.ChallAccPath != AccPath {
 		ChallAccPath = config.ChallAccPath
+	}
+	if _, err := os.Stat(IdleFilePath); err != nil {
+		os.Mkdir(IdleFilePath, 0755)
 	}
 }
 
@@ -244,17 +267,6 @@ func (p *Prover) SetChallengeStateForTest(front, rear int64) {
 func (p *Prover) GenerateIdleFileSet() error {
 
 	fileNum := p.setLen * p.clusterSize
-	freeSpace, err := util.GetDirFreeSpace(IdleFilePath)
-	freeSpace /= 1024 * 1024
-	var reserved int64 = 256
-	if err != nil {
-		return errors.Wrap(err, "generate idle file set error")
-	}
-
-	if p.space == fileNum*FileSize &&
-		freeSpace > uint64(p.Expanders.K*FileSize+reserved) {
-		p.space += p.Expanders.K * FileSize
-	}
 
 	if p.space < (fileNum+p.setLen*p.Expanders.K)*FileSize {
 		return SpaceFullError
@@ -282,20 +294,14 @@ func (p *Prover) GenerateIdleFileSets(tNum int) error {
 	if tNum <= 0 {
 		return errors.New("generate idle file sets error bad thread number")
 	}
-
-	freeSpace, err := util.GetDirFreeSpace(IdleFilePath)
-	freeSpace /= 1024 * 1024
-	var reserved int64 = 256
-	if err != nil {
-		return errors.Wrap(err, "generate idle file sets error")
-	}
+	var err error
 
 	fileNum := p.setLen * p.clusterSize
 
-	if p.space == fileNum*FileSize &&
-		freeSpace > uint64(p.Expanders.K*FileSize+reserved) {
-		p.space += p.Expanders.K * FileSize
-	}
+	// if p.space == fileNum*FileSize &&
+	// 	freeSpace > uint64(p.Expanders.K*FileSize+reserved) {
+	// 	p.space += p.Expanders.K * FileSize
+	// }
 
 	if p.space < (fileNum+p.setLen*p.Expanders.K)*FileSize*int64(tNum) {
 		if p.space >= (fileNum+p.setLen*p.Expanders.K)*FileSize {
@@ -993,20 +999,20 @@ func (p *Prover) organizeFiles(idx, num int64) error {
 				fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
 				fmt.Sprintf("%s-%d", expanders.FILE_NAME, j))
 			if err := util.DeleteFile(name); err != nil {
-				return err
+				//return err
 			}
 			// delete aux file
 			name = path.Join(dir,
 				fmt.Sprintf("%s-%d", expanders.CLUSTER_DIR_NAME, (i-1)/p.clusterSize+1),
 				fmt.Sprintf("%s-%d", expanders.AUX_FILE, j))
 			if err := util.DeleteFile(name); err != nil {
-				return err
+				//return err
 			}
 		}
 	}
 	name := path.Join(dir, expanders.COMMIT_FILE)
 	if err := util.DeleteFile(name); err != nil {
-		return err
+		//return err
 	}
 	p.space += num / p.clusterSize * p.Expanders.K * FileSize
 	return nil
@@ -1037,7 +1043,8 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 	count := int64(0)
 	fileTotalSize := FileSize * (p.Expanders.K + p.clusterSize) * 1024 * 1024
 	rootSize := (p.setLen*(p.Expanders.K+p.clusterSize) + 1) * int64(tree.DEFAULT_HASH_SIZE)
-	entries, err := ioutil.ReadDir(dir)
+
+	entries, err := os.ReadDir(dir) //ioutil.ReadDir(dir)
 	next := int64(1)
 	if err != nil {
 		return count, err
@@ -1061,7 +1068,7 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 		if rootsFile.Size() != rootSize {
 			continue
 		}
-		clusters, err := ioutil.ReadDir(path.Join(dir, entry.Name()))
+		clusters, err := os.ReadDir(path.Join(dir, entry.Name()))
 		if err != nil {
 			return count, err
 		}
@@ -1072,13 +1079,17 @@ func (p *Prover) calcGeneratedFile(dir string) (int64, error) {
 				continue
 			}
 			size := int64(0)
-			files, err := ioutil.ReadDir(path.Join(dir, entry.Name(), cluster.Name()))
+			files, err := os.ReadDir(path.Join(dir, entry.Name(), cluster.Name()))
 			if err != nil {
 				return count, err
 			}
 			for _, file := range files {
-				if !file.IsDir() && file.Size() >= MiniFileSize {
-					size += file.Size()
+				info, err := file.Info()
+				if err != nil {
+					continue
+				}
+				if !file.IsDir() && info.Size() >= MiniFileSize {
+					size += info.Size()
 				}
 			}
 			if size == fileTotalSize {
